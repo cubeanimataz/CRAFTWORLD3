@@ -35,7 +35,9 @@ This is just a hobby project, don't take its programming too seriously! (Though 
 - Customisable number-crunching; don't want to use the Simplified notation? You can use Scientific or even ScientificNormalised notation!
 - Permadeath; the proper way to play CRAFTWORLD3 is with this turned on! But if you are a saint, you can turn this off...
 - Optional PvP; chig-chig boom! Kill other players in this optional mode!
+- Developer Flare; let the developers be known! A special crown is rendered above official developers of the game (can be turned off).
 - Punkbuster; punishes naughty players who try to exploit the game (for example disconnecting before they die)!
+- Special administrator system; optionally use a special seperate admin system for managing CRAFTWORLD3.
 
 # DRAWBACKS
 CRAFTWORLD3, like many other things on the Garry's Mod workshop, have their own flaws and quirks.
@@ -87,7 +89,11 @@ By default, you get:
 - 3 Improvement points every 3000th level
 - 3 Empowerment points every 5000th level
 - 6 Ameliorate points every 10000th level
+
 Your gear do not rely on points to upgrade levels. Instead, your gear can only be upgraded to the levels of your Craftling!
 So for example, if you are Level 19 and Rank 1, then that means your gear can only go up to the same levels each.
 But they do not need any special points to upgrade level types other than Level.
 Higher-tier leveling systems impact your strength more dramatically than predecessing leveling systems!
+How strong can you become?
+
+
