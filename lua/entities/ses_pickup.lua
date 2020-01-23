@@ -1,20 +1,12 @@
---CRAFTWORLD 2 (C) JEN WALTER 2019
---This source code file is NOT to be uploaded to other people or on websites, you WILL lose co-owner privileges otherwise!
---FILE: ses_pickup
---PURPOSE: Serves as the item entity ingame.
---PROGRAMMING DIFFICULTY: [||||||    ]Above Medium
---ASK FOR HELP IF YOU ARE STUCK OR ARE NOT SURE WHAT TO DO
---DO NOT REMOVE THESE COMMENTS
-
 AddCSLuaFile()
 
 DEFINE_BASECLASS( "base_anim" )
 
 
 ENT.PrintName		= "Pickup"
-ENT.Author			= "Jen Walter [owner and main programmer], Jaiike Synx [co-owner and assistant programmer]"
-ENT.Information		= "Item drop from CraftWoRLD 2."
-ENT.Category		= "CraftWoRLD 2"
+ENT.Author			= "Jen Walter"
+ENT.Information		= "Item drop from CRAFTWORLD3."
+ENT.Category		= "CRAFTWORLD3"
 
 ENT.Editable			= true
 ENT.Spawnable			= true
@@ -24,7 +16,7 @@ ENT.RenderGroup 		= RENDERGROUP_TRANSLUCENT
 list.Set( "SENT", "Pickup", {
 	Name = "Pickup", 
 	Class = "ses_pickup", 
-	Category = "CraftWoRLD 2"
+	Category = "CRAFTWORLD3"
 } )
 
 function ENT:SpawnFunction( ply, tr, ClassName )
@@ -196,7 +188,6 @@ function ENT:Initialize()
 		
 		if self.sndpitch == nil then self.sndpitch = 100 end --error-proofing
 
-		--leave these be
 		if self.NoPhysics then
 			self:SetModel("models/hunter/blocks/cube025x025x025.mdl")
 		else
@@ -255,12 +246,11 @@ function ENT:Initialize()
 		self:SetTrigger(true)
 		self:PrecacheGibs()
 		self:DrawShadow(false)
-		--/leave these be
 		
 		self.BeginUse = true
 		timer.Simple(0.01, function() if IsValid(self) then self.BeginUse = nil end end) --for insta-give pickups
 	
-		self.PickedUp = 0 --if you change this you're fucking retarded o_o
+		self.PickedUp = 0
 
 		if self.Master then
 				ParticleEffectAttach( "mr_portal_exit", 1, self, 2 )
@@ -577,7 +567,7 @@ function ENT:DropCrystalRewards()
 	end
 end
 
-function ENT:ActivateEffect( ply ) --DON'T CALL THIS FUNCTION OUTSIDE OF ENT:Use PLEASE (you really shouldn't be calling it yourself anyway)
+function ENT:ActivateEffect( ply )
 		local raritycolours = {Color(255,255,255), Color(0,255,0), Color(0,133,255), Color(127,0,255),Color(255,135,0),Color(0,255,255),Color(255,0,0),Color(0,0,255),Color(255,133,133),Color(0,0,0),Color(255,0,255)}
 		--if self.Important then
 		--	Announce(ply:Nick() .. " got " .. self.PickupName .. " [x" .. string.Comma(self.Health64) .. "]", raritycolours[math.min(math.max(1,self.Rare),#raritycolours) or 1], Color(64,64,64), 1.2)
@@ -589,7 +579,6 @@ function ENT:ActivateEffect( ply ) --DON'T CALL THIS FUNCTION OUTSIDE OF ENT:Use
 end
 
 if SERVER then
---do not touch ENT:Think() at all, even if you are confident. unless if you exactly know what you're doing and know the effect it will produce.
 function ENT:Think()
 	if IsValid(self:GetChildren()[1]) && self.NoPhysics then
 		local child = self:GetChildren()[1]
@@ -673,35 +662,10 @@ function ENT:Think()
 end
 end
 
-function ENT:Use( ply, caller ) --don't touch this function unless if you know what you are doing *eyeroll*
-	if self.GivesItemIfNotGot then
-		if ply:HasWeapon(self.GivesItem) then
-			ply:PrintMessage(HUD_PRINTCENTER, "You can't stack this item.")
-			return
-		end
-	end
-	if ply.CarryingCrystal && self.IsCrystal then
-		if self.SubID != ply.CarryingCrystal.SubID then
-			ply:PrintMessage(HUD_PRINTCENTER, "You may only stack crystals of the same type.")
-			return
-		end
-	end
+function ENT:Use( ply, caller )
 	if self.PickedUp == 0 then
-	if self.keyrequired then
-		if ply:HasKey(self.keyrequired) then
-			ply:TakeKey(self.keyrequired)
-			self.keyrequired = nil
-		else
-			Announce("[ x ] You do not have any suitable key that this item requires.", Color(127,127,127), Color(0,0,0), 1, ply)
-			return
-		end
-	end
 	if self.DontAnimate then self.Immediate = true end
 	if ply:IsPlayer() && caller:IsPlayer() then
-	if self.Medical && ply.Health64 >= ply.MaxHealth64 && ply.Armour64 >= ply.MaxHealth64 then
-		Announce("[ x ] Your health and armour are both full.", Color(127,127,127), Color(0,0,0), 1, ply)
-		return
-	end
 	if (self.ItemOwner == "unassigned" or self.ItemOwner == ply:SteamID()) && !self.DisallowUse then
 		if !self.BeginUse then
 			self.DisallowUse = true
