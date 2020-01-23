@@ -2,6 +2,13 @@
 An incremental roguelike RPG sandbox addon for Garry's Mod, intended for use with Sandbox.
 This is just a hobby project, don't take its programming too seriously! (Though you probably will anyway.)
 
+# NOTICE
+This is just the CODE that makes up CRAFTWORLD3. The sounds and materials/textures can be downloaded from MediaFire:
+
+http://www.mediafire.com/file/aaryt4blhcg6spj/CRAFTWORLD3_CONTENT.rar/file
+
+Last Updated: 23/01/2020 07:10 BST
+
 # DEPENDENCIES (CONTENT)
 - Team Fortress 2
 
