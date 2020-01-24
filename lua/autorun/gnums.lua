@@ -1,22 +1,4 @@
---[[
-gNums
-by cube#5947
-Addon Type: Function Library
-Description: Provides a simplistic assortment of functions for handling absurdly large numbers that are way past 2^1024 (the limit of a raw number).
-These BigNumbers should never contain negative values of any kind!
-Version: 0.1
-
-Notes:
-The purpose of a BigNumber library is to allow programmers to work with numbers that are otherwise past the limit of a raw number.
-Incremental games (like Time Warpers) are known to use these kinds of libraries to store numbers that would otherwise exceed the maximum number limit.
-
-A BigNumber in Garry's Mod can simply be represented as a table with two numerical values.
-While the numbers themselves have a limit, we can use simple methods to make the table represent a different kind of number: a BigNumber!
-A BigNumber in gNums is composed of any non-negative number for the first value (the Value), and a non-negative, non-decimal number (the Power) for the second value.
-
-Normal math won't know how to interpret this of course.
-]]
-
+--This Lua file contains code used for CRAFTWORLD3 to compute BigNumbers.
 --bignumnew
 --Creates a new BigNumber.
 function bignumnew(number, power)
