@@ -1,11 +1,9 @@
-# UNDER CONSTRUCTION
-Do not attempt to use this build of CRAFTWORLD3 yet - I am currently working on updating
-it and it should be available again soon!
-Please check back later and regularly.
-To ensure that you know if this is available or not, a status tracker is now here below!
+# LAST UPDATED
+Game Code - 05/02/2020 01:00 BST
+Game Assets - 23/01/2020 07:10 BST
 
 # STATUS
-Currently NOT ready for use. Check back later.
+Ready for use! v3.1
 
 # CRAFTWORLD3
 An incremental roguelike RPG sandbox addon for Garry's Mod, intended for use with Sandbox.
