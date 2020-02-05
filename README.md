@@ -3,6 +3,10 @@ Game Code - 05/02/2020 01:00 BST
 
 Game Assets - 23/01/2020 07:10 BST
 
+Get the assets here: http://www.mediafire.com/file/aaryt4blhcg6spj/CRAFTWORLD3_CONTENT.rar/file
+
+You should always check when you got the assets to see if you need to update them!
+
 # STATUS
 Ready for use! v3.1
 
@@ -12,8 +16,6 @@ This is just a hobby project, don't take its programming too seriously! (Though 
 
 # NOTICE
 This is just the CODE that makes up CRAFTWORLD3. The sounds and materials/textures can be downloaded from MediaFire:
-
-http://www.mediafire.com/file/aaryt4blhcg6spj/CRAFTWORLD3_CONTENT.rar/file
 
 Last Updated: 23/01/2020 07:10 BST
 
