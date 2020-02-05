@@ -117,21 +117,36 @@ if !file.Exists(sdir .. "/cfg.txt", "DATA") then
 				["wave_autostart"] = 20.0,
 				["wave_autostart_boss"] = 45.0,
 				["boss_activatedelay"] = 5.0,
-				["boss_activatedelay_tooclose_range"] = 65.0
+				["boss_activatedelay_tooclose_range"] = 65.0,
+				["true_craftling_mode"] = false,
+				["anti_troll"] = true
 			}
 		}
 	))
 end
-local cfg = file.Read("craftworld3_server/cfg.txt", "DATA")
+local cfg = file.Read(sdir .. "/cfg.txt", "DATA")
 cfg = util.JSONToTable(cfg)
+
+function cw3error(msg)
+	PrintMessage(HUD_PRINTCENTER, "[!] CRAFTWORLD3 is creating errors. [!]")
+	PrintMessage(HUD_PRINTTALK, "[CRAFTWORLD3 Error] " .. tostring(msg))
+	error("[CRAFTWORLD3 Error] " .. tostring(msg))
+end
 
 function GetAmpFactor()
 	return {cfg["game"]["zone_npc_powerscale_factor"], cfg["game"]["zone_npc_powerscale_factor_increment"]}
 end
 
-function cw3error(msg)
-	PrintMessage(HUD_PRINTTALK, "[CRAFTWORLD3 Error] " .. tostring(msg))
-	return error("[CRAFTWORLD3 Error] " .. tostring(msg))
+--True Craftling Mode
+--Automatic power scaling for NPCs and other various gameplay changes.
+function TrueCraftling()
+	return cfg["game"]["true_craftling_mode"]
+end
+
+--Anti-Griefing
+--Stops mischevious players from trolling the game's logic by using countermeasures.
+function AntiGriefing()
+	return cfg["game"]["anti_troll"] or true
 end
 
 util.AddNetworkString("addpopoff")
@@ -150,44 +165,181 @@ end
 
 local curzone = 1 --current zone number
 local zonekills = 0 --number of kills acquired
-local maxzonekills = math.floor(cfg["game"]["zone_npc_basecount"] * cfg["game"]["zone_npc_exponent"]) --number of kills needed to progress to the next zone
+local maxzonekills = math.min(math.floor(cfg["game"]["zone_npc_basecount"] * cfg["game"]["zone_npc_exponent"]), 30) --number of kills needed to progress to the next zone
 local spawningallowed = CurTime() --admins are only allowed to spawn things when CurTime() is larger than this variable.
 local allnpchp = {0, 0}
 local autostart = CurTime() + cfg["game"]["wave_autostart"]
+local rainbowchestvalue = {900, 0}
+local zonebonus = {300, 0}
+local timeuntilnextchest = CurTime() + 600
+local capsulechance = 1
 
-local enemies = {}
-enemies["npc_zombie"] = {hp = bignumread("65"), dmg = bignumread("30"), gold = bignumread("35")}
-enemies["npc_fastzombie"] = {hp = bignumread("40"), dmg = bignumread("10"), gold = bignumread("50")}
-enemies["npc_zombie_torso"] = {hp = bignumread("55"), dmg = bignumread("16"), gold = bignumread("28")}
-enemies["npc_fastzombie_torso"] = {hp = bignumread("35"), dmg = bignumread("8"), gold = bignumread("31")}
-enemies["npc_poisonzombie"] = {hp = bignumread("300"), dmg = bignumread("92"), gold = bignumread("115")}
-enemies["npc_headcrab"] = {hp = bignumread("25"), dmg = bignumread("9"), gold = bignumread("13")}
-enemies["npc_headcrab_fast"] = {hp = bignumread("13"), dmg = bignumread("6"), gold = bignumread("9")}
-enemies["npc_headcrab_black"] = {hp = bignumread("100"), dmg = bignumread("130"), gold = bignumread("90")}
-enemies["npc_antlion"] = {hp = bignumread("450"), dmg = bignumread("48"), gold = bignumread("200")}
-enemies["npc_antlionguard"] = {hp = bignumread("1.9K"), dmg = bignumread("750"), gold = bignumread("2.75K")}
-enemies["npc_combine_s"] = {hp = bignumread("400"), dmg = bignumread("13"), gold = bignumread("195")}
-enemies["npc_metropolice"] = {hp = bignumread("300"), dmg = bignumread("11"), gold = bignumread("137")}
-enemies["npc_manhack"] = {hp = bignumread("80"), dmg = bignumread("20"), gold = bignumread("100")}
-enemies["npc_rollermine"] = {hp = bignumread("1K"), dmg = bignumread("80"), gold = bignumread("1.2K")}
+local listenemies = {}
+listenemies["npc_zombie"] = {hp = bignumread("65"), dmg = bignumread("30"), gold = bignumread("35"), playerscale = 1}
+listenemies["npc_fastzombie"] = {hp = bignumread("40"), dmg = bignumread("10"), gold = bignumread("50"), playerscale = 0.9}
+listenemies["npc_zombie_torso"] = {hp = bignumread("55"), dmg = bignumread("16"), gold = bignumread("28"), playerscale = 0.8}
+listenemies["npc_fastzombie_torso"] = {hp = bignumread("35"), dmg = bignumread("8"), gold = bignumread("31"), playerscale = 0.75}
+listenemies["npc_poisonzombie"] = {hp = bignumread("300"), dmg = bignumread("92"), gold = bignumread("115"), playerscale = 1.1}
+listenemies["npc_headcrab"] = {hp = bignumread("25"), dmg = bignumread("9"), gold = bignumread("13"), playerscale = 0.3}
+listenemies["npc_headcrab_fast"] = {hp = bignumread("13"), dmg = bignumread("6"), gold = bignumread("9"), playerscale = 0.23}
+listenemies["npc_headcrab_black"] = {hp = bignumread("100"), dmg = bignumread("130"), gold = bignumread("90"), playerscale = 0.5}
+listenemies["npc_antlion"] = {hp = bignumread("450"), dmg = bignumread("48"), gold = bignumread("200"), playerscale = 1.65}
+listenemies["npc_antlionguard"] = {hp = bignumread("1.9K"), dmg = bignumread("750"), gold = bignumread("2.75K"), playerscale = 4}
+listenemies["npc_combine_s"] = {hp = bignumread("400"), dmg = bignumread("13"), gold = bignumread("195"), playerscale = 0.8}
+listenemies["npc_metropolice"] = {hp = bignumread("300"), dmg = bignumread("11"), gold = bignumread("137"), playerscale = 0.9}
+listenemies["npc_manhack"] = {hp = bignumread("80"), dmg = bignumread("20"), gold = bignumread("100"), playerscale = 0.2}
+listenemies["npc_rollermine"] = {hp = bignumread("1K"), dmg = bignumread("80"), gold = bignumread("1.2K"), playerscale = 0.5}
+listenemies["npc_antlion_worker"] = {hp = bignumread("833"), dmg = bignumread("36"), gold = bignumread("600"), playerscale = 1.35}
 
-local allowednpcs = {"npc_zombie", "npc_fastzombie", "npc_zombie_torso", "npc_fastzombie_torso", "npc_poisonzombie", "npc_headcrab", "npc_headcrab_fast", "npc_headcrab_black", "npc_antlion", "npc_antlionguard", "npc_combine_s", "npc_metropolice", "npc_manhack", "npc_rollermine"}
+local enemies = listenemies
+
+local zoneclear = false
+
+local allowednpcs = {"npc_zombie", "npc_fastzombie", "npc_zombie_torso", "npc_fastzombie_torso", "npc_poisonzombie", "npc_headcrab", "npc_headcrab_fast", "npc_headcrab_black", "npc_antlion", "npc_antlionguard", "npc_combine_s", "npc_metropolice", "npc_manhack", "npc_rollermine", "npc_antlion_worker"}
+
+local weaponevos = {}
+weaponevos["tfa_cso_m4a1"] = {"tfa_cso_m4a1red", "tfa_cso_m4a1g", "tfa_cso_m4a1gold", "tfa_cso_m4a1dragon", "tfa_cso_darkknight", "tfa_cso_darkknight_v6", "tfa_cso_darkknight_v8"}
+weaponevos["tfa_cso_m60"] = {"tfa_cso_m60g", "tfa_cso_m60_v6", "tfa_cso_m60_v8", "tfa_cso_m60craft"}
+weaponevos["tfa_cso_m95"] = {"tfa_cso_m95_expert", "tfa_cso_m95_master", "tfa_cso_m95ghost", "tfa_cso_m95tiger"}
+weaponevos["tfa_cso_magnumdrill"] = {"tfa_cso_magnumdrill_expert"}
+weaponevos["tfa_cso_mg3"] = {"tfa_cso_mg3g", "tfa_cso_mg3_v6", "tfa_cso_mg3_v8"}
+weaponevos["tfa_cso_pkm"] = {"tfa_cso_pkm_gold", "tfa_cso_pkm_expert", "tfa_cso_pkm_master"}
+weaponevos["tfa_cso_mp7a1"] = {"tfa_cso_mp7a160r", "tfa_cso_mp7unicorn"}
+weaponevos["tfa_cso_groza"] = {"tfa_cso_groza_expert", "tfa_cso_groza_master"}
+weaponevos["tfa_cso_plasmagun"] = {"tfa_cso_plasmagun_v6"}
+weaponevos["tfa_cso_m24"] = {"tfa_cso_xm2010", "tfa_cso_xm2010_v6", "tfa_cso_xm2010_v8"}
+weaponevos["tfa_cso_rpg7"] = {"tfa_cso_rpg7_v6", "tfa_cso_rpg7_v8"}
+weaponevos["tfa_cso_m82"] = {"tfa_cso_m82_v6", "tfa_cso_m82_v8"}
+weaponevos["tfa_cso_newcomen"] = {"tfa_cso_newcomen_v6"}
+weaponevos["tfa_cso_mk3a1"] = {"tfa_cso_mk3a1_flame"}
+weaponevos["tfa_cso_desperado"] = {"tfa_cso_desperado_v6"}
+weaponevos["tfa_cso_runebreaker"] = {"tfa_cso_runebreaker_expert"}
+weaponevos["tfa_cso_skull1"] = {"tfa_cso_skull2", "tfa_cso_skull3_a", "tfa_cso_skull3_b", "tfa_cso_skull4", "tfa_cso_skull5", "tfa_cso_skull6", "tfa_cso_m249ex", "tfa_cso_skull8", "tfa_cso_skull9"}
+weaponevos["tfa_cso_sl8"] = {"tfa_cso_sl8g", "tfa_cso_sl8ex"}
+weaponevos["tfa_cso_spas12"] = {"tfa_cso_spas12ex", "tfa_cso_spas12exb", "tfa_cso_spas12superior", "tfa_cso_spas12maverick"}
+weaponevos["tfa_cso_starchaserar"] = {"tfa_cso_starchasersr"}
+weaponevos["tfa_cso_scout"] = {"tfa_cso_scout_red"}
+weaponevos["tfa_cso_stg44"] = {"tfa_cso_stg44g", "tfa_cso_stg44_expert", "tfa_cso_stg44_master"}
+weaponevos["tfa_cso_trg42"] = {"tfa_cso_trg42g"}
+weaponevos["tfa_cso_savery"] = {"tfa_cso_savery_v6"}
+weaponevos["tfa_cso_thompson_chicago"] = {"tfa_cso_thompson_gold", "tfa_cso_thompson_expert", "tfa_cso_thompson_master"}
+weaponevos["tfa_cso_thunderbolt"] = {"tfa_cso_thunderbolt_v6"}
+weaponevos["tfa_cso_tmp"] = {"tfa_cso_tmpdragon"}
+weaponevos["tfa_cso_uts15"] = {"tfa_cso_uts15g", "tfa_cso_uts15_v6", "tfa_cso_uts15_v8"}
+weaponevos["tfa_cso_turbulent1"] = {"tfa_cso_turbulent3", "tfa_cso_turbulent5", "tfa_cso_turbulent7", "tfa_cso_turbulent11"}
+weaponevos["tfa_cso_thanatos1"] = {"tfa_cso_thanatos3", "tfa_cso_thanatos5", "tfa_cso_thanatos7", "tfa_cso_thanatos9", "tfa_cso_thanatos11"}
+weaponevos["tfa_cso_vulcanus1_a"] = {"tfa_cso_vulcanus1_b", "tfa_cso_vulcanus3", "tfa_cso_vulcanus5", "tfa_cso_vulcanus7", "tfa_cso_vulcanus11"}
+weaponevos["tfa_cso_wa2000"] = {"tfa_cso_wa2000_gold", "tfa_cso_wa2000_expert", "tfa_cso_wa2000_master"}
+weaponevos["tfa_cso_m1887"] = {"tfa_cso_m1887_gold", "tfa_cso_m1887_expert", "tfa_cso_m1887_master"}
+weaponevos["tfa_cso_xm8"] = {"tfa_cso_xm8_sharpshooter"}
+weaponevos["tfa_cso_lycanthrope"] = {"tfa_cso_lycanthrope_expert"}
+weaponevos["tfa_cso_mg36"] = {"tfa_cso_mg36g"}
+weaponevos["tfa_cso_m249"] = {"tfa_cso_m249_xmas", "tfa_cso_m249camo", "tfa_cso_m249ep", "tfa_cso_m249phoenix"}
+weaponevos["tfa_cso_m2"] = {"tfa_cso_m2_v6", "tfa_cso_m2_v8"}
+weaponevos["tfa_cso_luger"] = {"tfa_cso_luger_gold", "tfa_cso_luger_expert", "tfa_cso_luger_master", "tfa_cso_luger_silver", "tfa_cso_luger_legacy"}
+weaponevos["tfa_cso_at4"] = {"tfa_cso_at4ex"}
+weaponevos["tfa_cso_m14ebr"] = {"tfa_cso_m14ebrg", "tfa_cso_m14ebr_expert", "tfa_cso_m14ebr_master"}
+weaponevos["tfa_cso_m16a1"] = {"tfa_cso_m16a1ep"}
+weaponevos["tfa_cso_kingcobra"] = {"tfa_cso_kingcobragold", "tfa_cso_kingcobra_v6", "tfa_cso_kingcobra_v8"}
+weaponevos["tfa_cso_ksg12"] = {"tfa_cso_ksg12_gold", "tfa_cso_ksg12_expert", "tfa_cso_ksg12_master"}
+weaponevos["tfa_cso_hk121"] = {"tfa_cso_hk121_custom"}
+weaponevos["tfa_cso_hk23"] = {"tfa_cso_hk23g", "tfa_cso_hk23_expert", "tfa_cso_hk23_master"}
+weaponevos["tfa_cso_gungnir_nrm"] = {"tfa_cso_gungnir"}
+weaponevos["tfa_cso_hk_g11"] = {"tfa_cso_g11g", "tfa_cso_g11_v6", "tfa_cso_g11_v8"}
+weaponevos["tfa_cso_gilboa"] = {"tfa_cso_gilboa_viper"}
+weaponevos["tfa_cso_glock"] = {"tfa_cso_glock_red"}
+weaponevos["tfa_cso_p90"] = {"tfa_cso_pchan"}
+weaponevos["tfa_cso_mk48"] = {"tfa_cso_mk48_expert", "tfa_cso_mk48_master"}
+weaponevos["tfa_cso_m79"] = {"tfa_cso_m79_gold"}
+weaponevos["tfa_cso_usp"] = {"tfa_cso_usp_red"}
+weaponevos["tfa_cso_infinite_silver"] = {"tfa_cso_infinite_black", "tfa_cso_infinite_red", "tfa_cso_dualinfinity", "tfa_cso_infinityex1", "tfa_cso_dualinfinityfinal"}
+weaponevos["tfa_cso_kriss_v"] = {"tfa_cso_dualkriss", "tfa_cso_dualkrisshero"}
+weaponevos["tfa_cso_guitar"] = {"tfa_cso_violingun"}
+weaponevos["tfa_cso_dbarrel"] = {"tfa_cso_dbarrel_g", "tfa_cso_tbarrel", "tfa_cso_qbarrel"}
+weaponevos["tfa_cso_budgetsword"] = {"tfa_cso_dualsword", "tfa_cso_dualsword_rb"}
+weaponevos["tfa_cso_deagle"] = {"tfa_cso_deaglered", "tfa_cso_g_deagle", "tfa_cso_crimson_hunter", "tfa_cso_crimson_hunter_expert"}
+weaponevos["tfa_cso_awp"] = {"tfa_cso_awp_red", "tfa_cso_awpcamo", "tfa_cso_awpz", "tfa_cso_elvenranger"}
+weaponevos["tfa_cso_as50"] = {"tfa_cso_as50g", "tfa_cso_as50_expert", "tfa_cso_as50_master"}
+weaponevos["tfa_cso_ak47"] = {"tfa_cso_ak47red", "tfa_cso_g_ak47", "tfa_cso_ak47_dragon", "tfa_cso_paladin", "tfa_cso_paladin_v6", "tfa_cso_paladin_v8"}
+weaponevos["tfa_cso_balrog1"] = {"tfa_cso_balrog3", "tfa_cso_balrog5", "tfa_cso_balrog7", "tfa_cso_balrog11"}
+weaponevos["tfa_cso_xm1014"] = {"tfa_cso_xm1014red"}
+weaponevos["tfa_cso_bendita"] = {"tfa_cso_bendita_v6"}
+weaponevos["tfa_cso2_m3"] = {"tfa_cso2_m3boom", "tfa_cso_m3shark", "tfa_cso2_m3dragon", "tfa_cso_m3dragon"}
+weaponevos["tfa_cso_dragonblade"] = {"tfa_cso_dragonblade_expert"}
+weaponevos["tfa_cso_tacticalknife"] = {"tfa_cso_dualtacknife", "tfa_cso_tritacknife"}
+weaponevos["tfa_cso_katana"] = {"tfa_cso_dualkatana"}
+weaponevos["tfa_cso_nata"] = {"tfa_cso_dualnata"}
+weaponevos["tfa_cso_m950"] = {"tfa_cso_m950_v6", "tfa_cso_m950_v8"}
+weaponevos["tfa_cso_arx160"] = {"tfa_cso_arx160_expert", "tfa_cso_arx160_master"}
+weaponevos["tfa_bo4_welling"] = {"tfa_bo4_welling_dw"}
+weaponevos["tfa_bo4_strife"] = {"tfa_bo4_rk7"}
+weaponevos["tfa_cso_sten_mk2"] = {"tfa_bo3_bootlegger"}
+local wpns = {"tfa_bo4_mozu", "tfa_bo3_m1911", "tfa_bo3_pharo", "tfa_bo3_mg08", "tfa_bo3_olympia", "tfa_bo3_m14", "tfa_bo3_haymaker12", "tfa_bo3_dingo", "tfa_bo3_marshal_16", "tfa_bo3_xr2", "tfa_bo3_ppsh", "tfa_bo4_kap45", "tfa_bo4_daemon", "tfa_bo4_strife", "tfa_bo4_welling", "tfa_cso_dbarrel", "tfa_cso2_m3", "tfa_cso_avalanche", "tfa_cso_dragoncannon", "tfa_cso_arx160", "tfa_cso_m950", "tfa_cso_laserminigun", "tfa_cso_r93", "tfa_cso_m200", "tfa_cso_python", "tfa_cso_jaydagger", "tfa_cso_katana", "tfa_cso_nata", "tfa_cso_aeolis", "tfa_cso_as50", "tfa_cso_ak47", "tfa_cso_ak74u", "tfa_cso_akm", "tfa_cso_an94", "tfa_cso_anaconda", "tfa_cso_batista", "tfa_cso_bazooka", "tfa_cso_bendita", "tfa_cso_xm1014", "tfa_cso_automagv", "tfa_cso2_m3", "tfa_cso_awp", "tfa_cso_butterflyknife", "tfa_cso_balrog1", "tfa_cso_broad", "tfa_cso_deagle", "tfa_cso_f2000", "tfa_cso_p90", "tfa_cso_mk48", "tfa_cso_fnp45", "tfa_cso_glock", "tfa_cso_hk_g11", "tfa_cso_gungnir_nrm", "tfa_cso_dragonblade", "tfa_cso_hk121", "tfa_cso_hk23", "tfa_cso_infinite_silver", "tfa_cso_holysword", "tfa_cso_laserfist", "tfa_cso_kingcobra", "tfa_cso_kriss_v", "tfa_cso_ksg12","tfa_cso_guitar","tfa_cso_kujang","tfa_cso_cameragun","tfa_cso_umbrella","tfa_cso_m134_vulcan","tfa_cso_at4","tfa_cso_luger","tfa_cso_m14ebr","tfa_cso_m16a1","tfa_cso_m2","tfa_cso_m1911a1","tfa_cso_m1918bar","tfa_cso_m249","tfa_cso_m4a1","tfa_cso_m60","tfa_cso_m79","tfa_cso_m95","tfa_cso_mg3","tfa_cso_mg36","tfa_cso_mp7a1","tfa_cso_mp5","tfa_cso_newcomen","tfa_cso_groza","tfa_bo4_mp40","tfa_cso_m82","tfa_cso_pkm","tfa_cso_m24","tfa_cso_rpg7","tfa_cso_runebreaker","tfa_cso_ruyi","tfa_cso_trg42","tfa_cso_savery","tfa_cso_sapientia","tfa_cso_scarh","tfa_cso_scar_l","tfa_cso_sealknife","tfa_cso_serpent_blade","tfa_cso_lycanthrope","tfa_cso_skull1","tfa_cso_sl8","tfa_cso_snap_blade","tfa_cso_spas12","tfa_cso_duckgun","tfa_cso_starchaserar","tfa_cso_sten_mk2","tfa_cso_scout","tfa_cso_stg44","tfa_cso_tacticalknife","tfa_cso_budgetsword","tfa_cso_tempest","tfa_cso_thanatos1","tfa_cso_thompson_chicago","tfa_cso_thunderbolt","tfa_cso_thunderpistol","tfa_cso_tmp","tfa_cso_usp","tfa_cso_uts15","tfa_cso_wa2000","tfa_cso_vulcanus1_a","tfa_cso_xm8","tfa_cso_m1887","tfa_cso_m134_zhubajie","tfa_cso_stormgiant_tw"}
+
+timer.Create("cw3_coderefreshnotification", 0.3, 1, function()
+	PrintMessage(HUD_PRINTTALK, "[CRAFTWORLD3] Code has just been refreshed or initialised.")
+	PrintMessage(HUD_PRINTTALK, "Got " .. #wpns .. " weapon entries.")
+	PrintMessage(HUD_PRINTTALK, "Got " .. table.Count(weaponevos) .. " weapon evolution paths.")
+	local weaponstotal = 0
+	for i = 1, #wpns do
+		weaponstotal = weaponstotal + 1
+		if weaponevos[wpns[i]] != nil then
+			weaponstotal = weaponstotal + table.Count(weaponevos[wpns[i]])
+		end
+	end
+	PrintMessage(HUD_PRINTTALK,  weaponstotal .. " total unique weapons.")
+end)
+function GetStrongestPlayer()
+	local strongest = {"INVALID", {0, 0}, Entity(0)}
+	for k, ply in pairs(player.GetAll()) do
+		if strongest[1] != ply:SteamID() then
+			if bignumcompare(PowerMeasure(ply), strongest[2]) == 1 then --only accept entry if it's GREATER, not GREATER THAN OR EQUAL TO.
+				strongest[1] = ply:SteamID()
+				strongest[2] = PowerMeasure(ply)
+				strongest[3] = ply
+			end
+		end
+	end
+	if strongest[1] == "INVALID" then cw3error("Invalid handle with finding strongest player") end
+	if strongest[3] == Entity(0) then cw3error("Invalid handle with finding strongest player") end
+	return strongest[3]
+end
+
+function TallySpecialLevels(ent)
+	if ent:IsPlayer() then
+		local qty = 0
+		for i = 1, 9 do
+			qty = qty + (ent.accountdata["level"][i + 1]*i)
+		end
+		return qty
+	end
+end
+
+function GetCurZone()
+	return curzone
+end
+
+function Equalise()
+	local strong = GetStrongestPlayer()
+	local reductionscale = math.max(0, (TallySpecialLevels(strong) - (curzone*4))/15)
+	for a = 1, #allowednpcs do
+		enemies[allowednpcs[a]].hp = bignumdiv(bignummult(bignumcopy(strong.MaxHealth64), enemies[allowednpcs[a]].playerscale), 2.5 + reductionscale)
+		enemies[allowednpcs[a]].dmg = bignumdiv(bignummult(bignumcopy(strong.MaxShield64), enemies[allowednpcs[a]].playerscale), 6.6 + reductionscale)
+		enemies[allowednpcs[a]].gold = bignumadd({1, curzone}, bignumdiv(bignumcopy(strong.accountdata["gold"]), {1, curzone}))
+	end
+	zonebonus = bignummult(bignumcopy(strong.accountdata["gold"]), 3.3)
+	--PrintMessage(HUD_PRINTTALK, "Zone Bonus: " .. bignumwrite(zonebonus))
+	rainbowchestvalue = bignumpow(bignumcopy(zonebonus), 3)
+	--PrintMessage(HUD_PRINTTALK, "Rainbow Chest: " .. bignumwrite(rainbowchestvalue))
+end
+
+timer.Simple(1, function() if TrueCraftling() then Equalise() end end)
 
 function ResetEnemyStrength()
-	enemies["npc_zombie"] = {hp = bignumread("65"), dmg = bignumread("30"), gold = bignumread("35")}
-	enemies["npc_fastzombie"] = {hp = bignumread("40"), dmg = bignumread("10"), gold = bignumread("50")}
-	enemies["npc_zombie_torso"] = {hp = bignumread("55"), dmg = bignumread("16"), gold = bignumread("28")}
-	enemies["npc_fastzombie_torso"] = {hp = bignumread("35"), dmg = bignumread("8"), gold = bignumread("31")}
-	enemies["npc_poisonzombie"] = {hp = bignumread("300"), dmg = bignumread("92"), gold = bignumread("115")}
-	enemies["npc_headcrab"] = {hp = bignumread("25"), dmg = bignumread("9"), gold = bignumread("13")}
-	enemies["npc_headcrab_fast"] = {hp = bignumread("13"), dmg = bignumread("6"), gold = bignumread("9")}
-	enemies["npc_headcrab_black"] = {hp = bignumread("100"), dmg = bignumread("130"), gold = bignumread("90")}
-	enemies["npc_antlion"] = {hp = bignumread("450"), dmg = bignumread("48"), gold = bignumread("200")}
-	enemies["npc_antlionguard"] = {hp = bignumread("1.9K"), dmg = bignumread("750"), gold = bignumread("2.75K")}
-	enemies["npc_combine_s"] = {hp = bignumread("400"), dmg = bignumread("13"), gold = bignumread("195")}
-	enemies["npc_metropolice"] = {hp = bignumread("300"), dmg = bignumread("11"), gold = bignumread("137")}
-	enemies["npc_manhack"] = {hp = bignumread("80"), dmg = bignumread("20"), gold = bignumread("100")}
-	enemies["npc_rollermine"] = {hp = bignumread("1K"), dmg = bignumread("80"), gold = bignumread("1.2K")}
+	rainbowchestvalue = {900, 0}
+	zonebonus = {300, 0}
+	enemies = listenemies
+	if TrueCraftling() then Equalise() end
 end
 
 function Hibernating()
@@ -203,6 +355,49 @@ function WarpFX(ent)
 	ParticleEffect("teleported_red", ent:GetPos(), Angle(0,0,0))
 end
 
+function CustomPickup(spawnpos, name, desc, model, material, snd, pitch, size, rarity, physics, lockto, funct, spawnfunct)
+	if !spawnpos then cw3error("CustomPickup - no pickup spawn position defined") end
+	if physics == nil then physics = true end
+	local custom = ents.Create("cw3_pickup")
+	custom.CustomItem = true
+	custom.CustomModelPath = model or "models/hunter/blocks/cube025x025x025.mdl"
+	custom.customsoundfile = snd or "rf/get.wav"
+	custom.customsndpitch = pitch or 100
+	custom.custommaterial = material or ""
+	custom.CustomPickupName = name or ""
+	custom.CustomDesc = desc or ""
+	custom.custommodelscale = size or 1
+	custom.CustomRare = rarity or 1
+	custom.CustomNoPhysics = not physics
+	if funct then
+		custom.customfunc = funct
+	end
+	if lockto then
+		custom.CustomCanOnlyBeTakenBy = lockto
+	end
+	if spawnfunct then
+		custom.customspawnfunc = spawnfunct
+	end
+	custom:SetPos(spawnpos)
+	custom:Spawn()
+end
+
+function LoneWolf()
+	if game.SinglePlayer() then
+		return true
+	else
+		return #player.GetAll() == 1
+	end
+end
+
+function PlayerCount()
+	if game.SinglePlayer() then
+		return 1
+	else
+		return #player.GetAll()
+	end
+end
+
 function Hibernate()
 	RunConsoleCommand("ai_disabled", "1")
 	for k, v in pairs(ents.GetAll()) do
@@ -216,56 +411,124 @@ function Hibernate()
 	end
 end
 
-function GetAllNPCHP()
-	local hp = {0, 0}
-	for k, v in pairs(ents.GetAll()) do
-		if v:IsNPC() then
-			if v.Health64 then
-				if bignumvalid(v.Health64) then
-					bignumadd(hp, v.Health64)
+function IncreaseEnemyStrength(iterations)
+	if !iterations then iterations = 1 end
+	for a = 1, iterations do
+		if TrueCraftling() then
+			for b = 1, #allowednpcs do
+				enemies[allowednpcs[b]].hp = bignummult(enemies[allowednpcs[b]].hp, 1.007)
+				enemies[allowednpcs[b]].dmg = bignummult(enemies[allowednpcs[b]].dmg, 1.007)
+				enemies[allowednpcs[b]].gold = bignummult(enemies[allowednpcs[b]].gold, 1.007)
+				zonebonus = bignummult(zonebonus, 1.007)
+				rainbowchestvalue = bignummult(rainbowchestvalue, 1.007)
+			end
+		else
+			for b = 1, #allowednpcs do
+				for c = 1, math.ceil(curzone/5) do
+					zonebonus = bignummult(zonebonus, GetAmpFactor()[1] + (((curzone-1)*GetAmpFactor()[2]) ^ 0.08) + (1.1^curzone))
+					rainbowchestvalue = bignummult(rainbowchestvalue, GetAmpFactor()[1] + (((curzone-1)*GetAmpFactor()[2]) ^ 0.02) + curzone*3 + (1.9^curzone))
+					for e = 1, math.ceil(curzone/5)^1.3 do
+						enemies[allowednpcs[b]].gold = bignummult(enemies[allowednpcs[b]].gold, GetAmpFactor()[1] + (((curzone-1)*GetAmpFactor()[2]) ^ 0.02) + curzone*3 + (1.9^curzone))
+					end
+				end
+				for f = 1, math.ceil(curzone/5)^2.35 do
+					enemies[allowednpcs[b]].hp = bignummult(enemies[allowednpcs[b]].hp, GetAmpFactor()[1] + (((curzone-1)*GetAmpFactor()[2]) ^ 0.2) + (1.4^curzone))
+					enemies[allowednpcs[b]].dmg = bignummult(enemies[allowednpcs[b]].dmg, GetAmpFactor()[1] + (((curzone-1)*GetAmpFactor()[2]) ^ 0.3) + (1.4^curzone))
 				end
 			end
 		end
 	end
-	allnpchp = hp
 end
 
-function IncreaseEnemyStrength(iterations)
-	if !iterations then iterations = 1 end
-	for a = 1, iterations do
-		for b = 1, #allowednpcs do
-			enemies[allowednpcs[b]].hp = bignummult(enemies[allowednpcs[b]].hp, GetAmpFactor()[1] + ((curzone-1)*GetAmpFactor()[2]))
-			enemies[allowednpcs[b]].dmg = bignummult(enemies[allowednpcs[b]].dmg, GetAmpFactor()[1] + ((curzone-1)*GetAmpFactor()[2]))
-			enemies[allowednpcs[b]].gold = bignummult(enemies[allowednpcs[b]].gold, GetAmpFactor()[1] + ((curzone-1)*GetAmpFactor()[2]))
-		end
-	end
-end
-
+local rationiter = 0
+timer.Remove("npcrationalise")
 function RationaliseEnemyStrength()
 	timer.Remove("npcrationalise")
 	ResetEnemyStrength()
+	rationiter = 0
+	if curzone <= 1 then spawningallowed = CurTime() + 1 end
 	if curzone-1 > 0 then
-		timer.Create("npcrationalise", 0, curzone-1, function()
-			IncreaseEnemyStrength(1)
+		timer.Create("npcrationalise", 0, 0, function()
+			if curzone - 1 - rationiter > 10000 then
+				IncreaseEnemyStrength(1000)
+				rationiter = rationiter + 1000
+			elseif curzone - 1 - rationiter > 1000 then
+				IncreaseEnemyStrength(100)
+				rationiter = rationiter + 100
+			elseif curzone - 1 - rationiter > 100 then
+				IncreaseEnemyStrength(10)
+				rationiter = rationiter + 10
+			else
+				IncreaseEnemyStrength(1)
+				rationiter = rationiter + 1
+			end
+			--PrintMessage(HUD_PRINTCENTER, "Loading Zone " .. string.Comma(curzone) .. "...\nStat-Scaling Iteration " .. string.Comma(rationiter) .. " / " .. string.Comma(curzone-1))
 			spawningallowed = CurTime() + 1 --disables spawning for 1 second
+			if rationiter >= curzone - 1 then
+				timer.Remove("npcrationalise")
+			end
 		end)
 	end
 end
 
 function SetZone(zone)
+	zoneclear = false
 	zone = math.Round(zone)
 	if zone != curzone then
 		curzone = zone
 		zonekills = 0
+		capsulechance = 1
 		if zone % math.Round(cfg["game"]["zone_boss_interval"]) == 0 then
 			maxzonekills = 1
 		else
-			maxzonekills = math.floor(cfg["game"]["zone_npc_basecount"] * (cfg["game"]["zone_npc_exponent"] ^ curzone))
+			maxzonekills = math.min(math.floor(cfg["game"]["zone_npc_basecount"] * (cfg["game"]["zone_npc_exponent"] ^ curzone)), 30)
 		end
 		RationaliseEnemyStrength()
 		KillBomb()
 	end
 end
+
+timer.Remove("zonereset")
+function ResetZone(additivedelay, resetprogress)
+	if !zoneclear then
+		PurgeEnemies()
+		spawningallowed = math.huge
+		if resetprogress then
+			zonekills = 0
+			KillBomb()
+		end
+		timer.Remove("zonereset")
+		timer.Create("zonereset", 2 + (additivedelay or 0), 1, function()
+			RationaliseEnemyStrength()
+		end)
+	end
+end
+
+function AttachVisual(ent, visualfx, nocenter)
+	local visual = ents.Create(visualfx)
+	visual:SetPos(ent:GetPos() and nocenter or (ent:GetPos() + ent:OBBCenter()))
+	visual:SetAngles(ent:GetAngles())
+	visual:SetCollisionGroup(COLLISION_GROUP_IN_VEHICLE)
+	visual.IsDebris = 1
+	visual.VisualFX = true
+	visual:SetParent(ent)
+	visual:Spawn()
+	if IsValid(visual:GetPhysicsObject()) then visual:GetPhysicsObject():EnableMotion(false) end
+end
+
+function AttachVisualTemp(lifetime, ent, visualfx, nocenter)
+	local visual = ents.Create(visualfx)
+	visual:SetPos(ent:GetPos() and nocenter or (ent:GetPos() + ent:OBBCenter()))
+	visual:SetAngles(ent:GetAngles())
+	visual:SetCollisionGroup(COLLISION_GROUP_IN_VEHICLE)
+	visual.IsDebris = 1
+	visual.VisualFX = true
+	visual:SetParent(ent)
+	visual:Spawn()
+	timer.Simple(lifetime, function() if IsValid(visual) then visual:Remove() end end)
+	if IsValid(visual:GetPhysicsObject()) then visual:GetPhysicsObject():EnableMotion(false) end
+end
+	
 
 function string.squash(number, nodecimals, maxterm)
 	if !isnumber(number) then return 0 end
@@ -298,14 +561,6 @@ function string.squash(number, nodecimals, maxterm)
 	end
 end
 
-function IsBaseCaptured()
-	local captured = false
-	for k, v in pairs(ents.FindByClass("ses_station")) do
-		if v.Captured then captured = true end
-	end
-	return captured
-end
-
 function dmgpop(str, dmgtype, ent)
 	local colours = {Color(255,255,255),Color(255,117,0),Color(0,97,255),Color(0,255,0),Color(0,79,0),Color(133,255,255),Color(127,0,255),Color(255,255,0),Color(109,255,109),Color(117,0,0), Color(0,127,255), Color(255,0,0), Color(127,127,127), Color(139,139,255), Color(255,139,139), Color(255,179,0), Color(255,0,255)}
 	SendPopoff(str, ent, colours[math.min(dmgtype, #colours)], Color(0,0,0))
@@ -317,9 +572,9 @@ function ApplyStatus(target, status, quantity, time, decaytype, model, noreapply
 	if quantity == 0 then return end
 	local duplicate = false
 	if quantity > 0 then
-		SendPopoff("+" .. string.Comma(quantity) .. " " .. string.upper(status), target,Color(255,127,255),Color(0,0,255))
+		SendPopoff("+" .. string.Comma(quantity) .. " " .. status, target,Color(255,127,255),Color(0,0,255))
 	else
-		SendPopoff(string.Comma(quantity) .. " " .. string.upper(status), target,Color(255,127,255),Color(255,0,0))
+		SendPopoff(string.Comma(quantity) .. " " .. status, target,Color(255,127,255),Color(255,0,0))
 	end
 	for i = 1, #target.StatusFX do
 		if target.StatusFX[i]["effect"] == status then
@@ -331,26 +586,19 @@ function ApplyStatus(target, status, quantity, time, decaytype, model, noreapply
 		local tbl = { ["effect"] = status, ["qty"] = quantity, ["time"] = time, ["decay"] = decaytype, ["visual"] = model }
 		table.insert(target.StatusFX, tbl)
 	end
-	target:EmitSound("rf/xploss.wav")
-	local beacon = ents.Create("prop_dynamic")
-	beacon:SetPos(target:GetPos() + target:OBBCenter())
-	beacon:SetModel(model)
-	beacon:SetMaterial("models/props_combine/stasisfield_beam")
-	beacon:SetColor(Color(0,255,255))
-	beacon:SetModelScale(5, 0)
-	beacon:SetModelScale(1, 2)
-	beacon:Spawn()
-	timer.Simple(2, function() if IsValid(beacon) then beacon:Remove() end end)
+	target:EmitSound("rf/shine.wav", 85, 100, 0.5)
 end
 
 function RemoveStatus(target, status)
 	if !target.StatusFX then return end
 	for i = 1, #target.StatusFX do
-		if target.StatusFX[i]["effect"] then
-			if target.StatusFX[i]["effect"] == status then
-				SendPopoff(string.upper(target.StatusFX[i]["effect"]) .. " wears off", target,Color(127,127,127),Color(255,255,255))
-				table.remove(target.StatusFX, i)
-				target:EmitSound("rf/xpgain.wav")
+		if target.StatusFX[i] then
+			if target.StatusFX[i]["effect"] then
+				if target.StatusFX[i]["effect"] == status then
+					SendPopoff(target.StatusFX[i]["effect"] .. " wears off", target,Color(127,127,127),Color(255,255,255))
+					table.remove(target.StatusFX, i)
+					target:EmitSound("rf/hole.wav", 85, 100, 0.5)
+				end
 			end
 		end
 	end
@@ -431,26 +679,6 @@ function addContentFolder( path )
 	end
 end
 
-resource.AddFile("resource/fonts/Overdose Sunrise.otf")
-resource.AddFile("resource/fonts/ZCOOL.ttf")
-resource.AddFile("resource/fonts/nasalization-rg.ttf")
-resource.AddFile("resource/fonts/LightNovelPOP.ttf")
-resource.AddFile("materials/game-border.png")
-resource.AddFile("materials/prestige.png")
-resource.AddFile("materials/sprites/shieldhex.vmt")
-resource.AddFile("materials/sprites/shieldhex.vtf")
-resource.AddFile("materials/sprites/shieldwarp.vmt")
-resource.AddFile("materials/bl_hud/hud_alert.vtf")
-resource.AddFile("materials/bl_hud/hud_bars.vtf")
-resource.AddFile("materials/bl_hud/hud_bars.vmt")
-resource.AddFile("materials/bl_hud/hud_bars_bg.vtf")
-resource.AddFile("materials/bl_hud/hud_bars_bg.vmt")
-resource.AddFile("materials/bl_hud/hud_bars_bg2.vmt")
-resource.AddFile("materials/bl_hud/hud_compass.vmt")
-resource.AddFile("materials/bl_hud/hud_compass.vtf")
-resource.AddFile("materials/bl_hud/hud_icons.vmt")
-resource.AddFile("materials/bl_hud/hud_icons.vtf")
-resource.AddFile("materials/bl_hud/icon_alert.vmt")
 resource.AddWorkshop("1551310214")
 resource.AddWorkshop("675138912")
 resource.AddWorkshop("777195612")
@@ -464,7 +692,7 @@ resource.AddWorkshop("1655753632")
 resource.AddWorkshop("918084741")
 resource.AddWorkshop("1636652043")
 
-file.CreateDir("craftworld3")
+file.CreateDir(sdir)
 
 function BreakEntity(victim, fallthru)
 						if victim:GetClass() == "gmod_hands" then return end
@@ -497,7 +725,7 @@ function BreakEntity(victim, fallthru)
 								end
 							timer.Simple(3, function() if IsValid(giblet) then giblet.SoftRemove = 1 end end)
 						end
-						if !string.find(victim:GetClass(), "ses_") then
+						if !string.find(victim:GetClass(), "cw3_") then
 							constraint.RemoveAll(victim)
 							if IsValid(victim:GetPhysicsObject()) then victim:GetPhysicsObject():EnableMotion(true) end
 							victim.IsDebris = 1
@@ -645,16 +873,6 @@ concommand.Add("destroyprops", function(ply)
 	end
 end)
 
-concommand.Add("destroyses", function(ply)
-	if ply:IsSuperAdmin() then
-		for k, ent in pairs(ents.FindByClass("ses_*")) do
-			if ent:GetClass() != "ses_chest" && ent:GetClass() != "ses_pickup" && ent:GetClass() != "ses_container" then
-				BreakEntity(ent)
-			end
-		end
-	end
-end)
-
 concommand.Add("silentslayall", function(ply)
 	if ply:IsSuperAdmin() then
 		for k, ent in pairs(ents.GetAll()) do
@@ -675,18 +893,35 @@ concommand.Add("slayall", function(ply)
 	end
 end)
 
-function SpawnGold(ent, gold)
+function SpawnGold(ent, gold, ignoretruecraftling)
 	if isnumber(gold) then gold = bignumconvert(gold) end
-	local g = ents.Create("ses_pickup")
+	if bignumzero(gold) then return end
+	local g = ents.Create("cw3_pickup")
 	g.Qty = gold
 	g.ItemID = 0
+	g.IgnoreTrueCraftling = (ignoretruecraftling or false)
 	g:SetPos(ent:GetPos() + ent:OBBCenter())
 	g:Spawn()
 end
 
+function ScatterGold(ent, gold, forcedamount, ignoretruecraftling)
+	if !forcedamount then forcedamount = math.random(4,7) end --default to random of 4 to 7 cash pickups if forcedamount is not defined
+	local amount = forcedamount
+	if isnumber(gold) then gold = bignumconvert(gold) end
+	if bignumzero(gold) then return end
+	for i = 1, amount do
+		local g = ents.Create("cw3_pickup")
+		g.Qty = bignumdiv(bignumcopy(gold), amount)
+		g.ItemID = 0
+		g.IgnoreTrueCraftling = (ignoretruecraftling or false)
+		g:SetPos(ent:GetPos() + ent:OBBCenter())
+		g:Spawn()
+	end
+end
+
 function BombExists()
 	local exists = false
-	for k, p in pairs(ents.FindByClass("ses_pickup")) do
+	for k, p in pairs(ents.FindByClass("cw3_pickup")) do
 		if p.ItemID == -2 then
 			exists = true
 		end
@@ -695,7 +930,7 @@ function BombExists()
 end
 
 function KillBomb()
-	for k, p in pairs(ents.FindByClass("ses_pickup")) do
+	for k, p in pairs(ents.FindByClass("cw3_pickup")) do
 		if p.ItemID == -2 then
 			WarpFX(p)
 			p:Remove()
@@ -703,10 +938,11 @@ function KillBomb()
 	end
 end
 
-function PurgeEnemies()
+function PurgeEnemies(gold)
+	if !gold then gold = 0 end
 	for k, ent in pairs(ents.GetAll()) do
 		if ent:IsNPC() then
-			SlayEnemy(ent, 0, true)
+			SlayEnemy(ent, gold, true)
 		end
 	end
 end
@@ -726,7 +962,7 @@ function CreateBomb(pos)
 		end
 	end
 	if BombExists() then KillBomb() end
-	local bomb = ents.Create("ses_pickup")
+	local bomb = ents.Create("cw3_pickup")
 	bomb.ItemID = -2
 	bomb:SetPos(pos)
 	bomb:Spawn()
@@ -735,48 +971,180 @@ end
 
 timer.Remove("zonetransition")
 function CompleteZone()
+	zoneclear = true
+	local zonechangetime = 7
 	if timer.Exists("zonetransition") then return end
 	timer.Remove("zonetransition") --just in case...
+	timer.Remove("zonereset")
 	zonekills = 0
-	Announce("Zone " .. curzone .. " Cleared", Color(0,255,255), Color(0,58,255), 5)
-	PurgeEnemies()
-	for k, p in pairs(ents.FindByClass("ses_pickup")) do
-		if p.PickedUp == 0 then
+	PurgeEnemies(0.15)
+	if curzone % math.Round(cfg["game"]["zone_boss_interval"]) != 0 then -- boss zone gold is managed by the boss
+		Announce("Zone " .. curzone .. " Cleared", Color(0,255,255), Color(0,58,255), 5)
+		SpawnGold(player.GetAll()[math.random(#player.GetAll())], zonebonus, true)
+	end
+	for k, p in pairs(ents.FindByClass("cw3_pickup")) do
+		if p.PickedUp == 0 && p.ItemID != 0 && !p.ZoneClearPickupImmunity then
 			local rnd = math.random(#player.GetAll())
 			timer.Simple(math.Rand(0.1,3), function() if IsValid(p) && IsValid(player.GetAll()[rnd]) then p:Use(player.GetAll()[rnd],player.GetAll()[rnd],3,1) elseif IsValid(p) then WarpFX(p) p:Remove() end end)
 		end
 	end
-	for k, ply in pairs(player.GetAll()) do
-		local rndsnd = math.random(3)
-		ply.Health64 = bignumcopy(ply.MaxHealth64)
-		ply.Shield64 = bignumcopy(ply.MaxShield64)
-		timer.Remove(ply:SteamID() .. "shieldcooldown")
-		ply.RegenActive = true
-		ply.RegenerationTime = 0
-		ply.stamina = 150
-		if curzone % math.Round(cfg["game"]["zone_boss_interval"]) == 0 then
-			ply:GiveCubes(1, GetZoneCubeValue()[1], ply:GetPos())
-			if curzone >= 25 then
-				ply:GiveCubes(2, GetZoneCubeValue()[2], ply:GetPos())
+	local spawns = ents.FindByClass("info_player_start")
+	for k, ply in pairs(player.GetAll()) do	
+		if !ply.CodeBusy then
+			timer.Remove(ply:SteamID() .. "shieldcooldown")
+			ply.stamina = 150
+			if curzone % math.Round(cfg["game"]["zone_boss_interval"]) == 0 then
+				ply:GiveCubes(1, bignumcalc(GetZoneCubeValue()[1]), ply:GetPos())
+				if curzone >= 25 then
+					ply:GiveCubes(2, bignumcalc(GetZoneCubeValue()[2]), ply:GetPos())
+				end
 			end
-		else
-			ply:RecoverPulses(1)
+			ply.RegenerationTime = 0
+			if curzone % math.Round(cfg["game"]["zone_boss_interval"]) == 0 then
+				ply.CodeBusy = true
+				ply.RegenActive = false
+				ply:Freeze(true)
+				ply:CreateRagdoll()
+				ply:SetNoDraw(true)
+				zonechangetime = 21
+				ply:EmitSound("rf/end.wav", 95, 80)
+				if ply.AntiGriefBossCountdown then
+					ply.AntiGriefBossCountdown = math.min(10, ply.AntiGriefBossCountdown + 2) --trust them a little bit
+				end
+				if ply.AntiGriefBossDamagePercent then ply.AntiGriefBossDamagePercent = math.max(0, ply.AntiGriefBossDamagePercent - 4) end --cut them a little bit of slack
+				Announce("=Summary=", Color(168,168,168), Color(0,0,0), 3, ply)
+				Announce("Shield Left: " .. bignumwrite(ply.Shield64) .. "/" .. bignumwrite(ply.MaxShield64), Color(0,158,255), Color(0,0,0), 3, ply)
+				Announce("Health Left: " .. bignumwrite(ply.Health64) .. "/" .. bignumwrite(ply.MaxHealth64), Color(92,0,0), Color(0,0,0), 3, ply)
+				Announce("Pulses Left: " .. ply.healthstate .. "/" .. 5, Color(127,0,255), Color(0,0,255), 5, ply)
+				for i = 1, ply.healthstate - 1 do
+					timer.Simple(i + 9, function() if IsValid(ply) then
+						ply:GiveCubes(1, {5*i, 0})
+						if i > 2 then
+							ply:GiveCubes(2, {3*(i-2), 0})
+						end
+					end end)
+				end
+				timer.Simple(zonechangetime, function() if IsValid(ply) then
+					ply.Health64 = bignumcopy(ply.MaxHealth64)
+					ply.Shield64 = bignumcopy(ply.MaxShield64)
+					ply.Block64 = bignumcopy(ply.MaxBlock64)
+					ply.RegenActive = true
+					ply.healthstate = 5
+					ply.CodeBusy = false
+					ply:Freeze(false)
+					if IsValid(ply:GetRagdollEntity()) then ply:GetRagdollEntity():Remove() end
+					ply:SetNoDraw(false)
+					local rnd = math.random(#spawns)
+					if #spawns > 0 then
+						ply:SetPos(spawns[rnd]:GetPos())
+						table.remove(spawns, rnd)
+						WarpFX(ply)
+					end
+				end end)
+			else
+				ply.Health64 = bignumcopy(ply.MaxHealth64)
+				ply.Shield64 = bignumcopy(ply.MaxShield64)
+				ply.Block64 = bignumcopy(ply.MaxBlock64)
+				ply.RegenActive = true
+				ply:EmitSound("rf/maxout.wav")
+				if ply.healthstate < 5 then
+					ply:RecoverPulses(1)
+				end
+			end
 		end
-		ply:EmitSound("rf/wave_outro" .. rndsnd .. ".wav")
 	end
 	spawningallowed = math.huge
-	timer.Create("zonetransition", 7, 1, function()
+	timer.Create("zonetransition", zonechangetime, 1, function()
 		SetZone(curzone + 1)
 	end)
 end
 
+function PowerMeasure(ent)
+	if ent:IsPlayer() then
+		local power = bignummult(bignumcopy(ent.MaxHealth64), 1.32)
+		bignumadd(power, bignummult(bignumcopy(ent.MaxShield64), 1.16))
+		bignumadd(power, bignummult(bignumcopy(ent.MaxBlock64), 0.54))
+		for k, w in pairs(ent:GetWeapons()) do
+			if w.Damage64 then
+				bignumadd(power, bignummult(bignumcopy(w.Damage64), 3.632))
+			end
+		end
+		return power
+	elseif ent:IsNPC() then
+		local power = bignummult(bignumcopy(ent.MaxHealth64), 1.29)
+		bignumadd(power, bignummult(bignumcopy(ent.Damage64), 2.358))
+		return power
+	else
+		return {0, 0}
+	end
+end
+
+function AutoUpgrade(ply) --automatically upgrades players who have absurdly large amounts of gold
+	if bignumelevate(ply.accountdata["gold"], ply.accountdata["prices"][1]) >= 3 then
+		for i = 1, math.Clamp(bignumelevate(ply.accountdata["gold"], ply.accountdata["prices"][1]), 1, 100) do
+			ply:ShopBuy(1, nil, true)
+		end
+	elseif bignumelevate(ply.accountdata["gold"], ply.accountdata["prices"][2]) >= 3 && ply.accountdata["points"][1] > 100 then
+		ply:ShopBuy(2, nil, true)
+	elseif bignumelevate(ply.accountdata["gold"], ply.accountdata["prices"][3]) >= 3 && ply.accountdata["points"][2] > 50 then
+		ply:ShopBuy(3, nil, true)
+	elseif bignumelevate(ply.accountdata["gold"], ply.accountdata["prices"][4]) >= 3 && ply.accountdata["points"][3] > 50 then
+		ply:ShopBuy(4, nil, true)
+	elseif bignumelevate(ply.accountdata["gold"], ply.accountdata["prices"][5]) >= 3 && ply.accountdata["points"][4] > 25 then
+		ply:ShopBuy(5, nil, true)
+	end
+end
+
+function TurboUpgrade(ply) --an alternative version that can be activated via a command, which autobuys levels constantly
+	if ply.TurboLv then
+		for i = 1, 10 do
+			ply:ShopBuy(i, nil, true)
+			ply:ShopBuy(i, ply:GetActiveWeapon(), true)
+		end
+	end
+end
+
 function SlayEnemy(ent, goldmult, noprogress)
+	if ent.NPCDead then return end
 	if !ent:IsNPC() then cw3error("Attempt to slay non-NPC: " .. tostring(ent)) return end
 	if ent == nil then cw3error("Target to slay does not exist (nil)") end
 	if goldmult == nil then goldmult = 1 end
+	local timelim = 7
 	if ent:IsNPC() then --just in case...
-		if ent.MotorLoop then
-			ent.MotorLoop:Stop()
+		ent:SetNWBool("npcisdead", true)
+		if ent.RainbowChest then
+			RewardRainbowChest(ent:GetPos() + Vector(0, 0, ent:OBBMaxs().z + 5))
+			if #ent:GetChildren() > 0 then
+				for k, m in pairs(ent:GetChildren()) do
+					BreakEntity(m)
+					m:Remove()
+				end
+			end
+		end
+		if ent.gCubes && ent.cCubes then
+			ParticleEffect("merasmus_spawn", ent:GetPos(), Angle(0,0,0))
+			local gift = ents.Create("cw3_pickup")
+			gift:SetPos(ent:GetPos() + ent:OBBCenter())
+			gift.ItemID = 7
+			gift.Qty = ent.gCubes
+			gift:Spawn()
+		elseif ent.gCubes then
+			ParticleEffect("merasmus_spawn", ent:GetPos(), Angle(0,0,0))
+			local gift = ents.Create("cw3_pickup")
+			gift:SetPos(ent:GetPos() + ent:OBBCenter())
+			gift.ItemID = 5
+			gift.Qty = ent.gCubes
+			gift:Spawn()
+		elseif ent.cCubes then
+			ParticleEffect("merasmus_spawn", ent:GetPos(), Angle(0,0,0))
+			local gift = ents.Create("cw3_pickup")
+			gift:SetPos(ent:GetPos() + ent:OBBCenter())
+			gift.ItemID = 6
+			gift.Qty = ent.cCubes
+			gift:Spawn()
+		end
+		if ent:GetModelScale() > 1 or ent:GetClass() == "npc_manhack" or ent:GetClass() == "npc_rollermine" then
+			if ent.MotorLoop then ent.MotorLoop:Stop() end
 			ent:EmitSound("rf/gore_metal.wav", 155, 100/(ent:GetModelScale()-0.75))
 			for i = 1, math.ceil(4*ent:GetModelScale()) do
 				local gibs = {"models/bots/gibs/demobot_gib_boss_arm1.mdl", "models/bots/gibs/demobot_gib_boss_arm2.mdl", "models/bots/gibs/demobot_gib_boss_leg1.mdl", "models/bots/gibs/demobot_gib_boss_leg2.mdl", "models/bots/gibs/demobot_gib_boss_leg3.mdl", "models/bots/gibs/demobot_gib_boss_pelvis.mdl","models/bots/gibs/heavybot_gib_boss_arm.mdl", "models/bots/gibs/heavybot_gib_boss_arm2.mdl", "models/bots/gibs/heavybot_gib_boss_chest.mdl", "models/bots/gibs/heavybot_gib_boss_leg.mdl", "models/bots/gibs/heavybot_gib_boss_leg2.mdl", "models/bots/gibs/heavybot_gib_boss_pelvis.mdl", "models/bots/gibs/pyrobot_gib_boss_arm1.mdl", "models/bots/gibs/pyrobot_gib_boss_arm2.mdl", "models/bots/gibs/pyrobot_gib_boss_arm3.mdl", "models/bots/gibs/pyrobot_gib_boss_chest.mdl", "models/bots/gibs/pyrobot_gib_boss_chest2.mdl", "models/bots/gibs/pyrobot_gib_boss_leg.mdl", "models/bots/gibs/pyrobot_gib_boss_pelvis.mdl", "models/bots/gibs/scoutbot_gib_boss_arm1.mdl", "models/bots/gibs/scoutbot_gib_boss_arm2.mdl", "models/bots/gibs/scoutbot_gib_boss_chest.mdl", "models/bots/gibs/scoutbot_gib_boss_leg1.mdl", "models/bots/gibs/scoutbot_gib_boss_leg2.mdl", "models/bots/gibs/scoutbot_gib_boss_pelvis.mdl", "models/bots/gibs/soldierbot_gib_boss_arm1.mdl", "models/bots/gibs/soldierbot_gib_boss_arm2.mdl", "models/bots/gibs/soldierbot_gib_boss_chest.mdl", "models/bots/gibs/soldierbot_gib_boss_leg1.mdl", "models/bots/gibs/soldierbot_gib_boss_leg2.mdl", "models/bots/gibs/soldierbot_gib_boss_pelvis.mdl"}
@@ -788,44 +1156,86 @@ function SlayEnemy(ent, goldmult, noprogress)
 				gib:SetSolid(SOLID_VPHYSICS)
 				gib:SetCollisionGroup(COLLISION_GROUP_DEBRIS)
 				gib:SetMaterial(ent:GetMaterial())
+				gib:SetColor(ent:GetColor())
+				gib:SetModelScale(ent:GetModelScale() - 0.75)
+				gib.IsDebris = 1
 				gib:Spawn()
 				timer.Simple(0, function() if IsValid(gib) then if IsValid(gib:GetPhysicsObject()) then gib:GetPhysicsObject():SetVelocity(VectorRand()*300) gib:GetPhysicsObject():AddAngleVelocity(VectorRand()*720) end end end)
 				timer.Simple(7, function() if IsValid(gib) then gib.InstantSoftRemove = true end end)
+				--timelim = 0
 			end
-		else
-			ent:EmitSound("rf/flesh.wav")
+		end
+		--else
 			local corpse = ents.Create("prop_ragdoll")
 			corpse:SetModel(ent:GetModel())
 			corpse:SetPos(ent:GetPos())
 			corpse:SetAngles(ent:GetAngles())
 			corpse:SetColor(Color(255,0,0))
 			corpse:SetMaterial(ent:GetMaterial())
+			corpse.IsDebris = 1
 			corpse:Spawn()
+			corpse:EmitSound("rf/flesh.wav")
 			corpse:SetCollisionGroup(COLLISION_GROUP_DEBRIS)
 			if string.find(ent:GetClass(), "zombie") then
 				corpse:SetBodygroup(0, 1)
 			end
-			timer.Simple(2, function() if IsValid(corpse) then corpse:Remove() end end)
-		end
-		if ent.Gold64 then
+			timer.Simple(7, function() if IsValid(corpse) then corpse.InstantSoftRemove = true end end)
+			timer.Simple(0, function() if IsValid(corpse) then
+				for i = 0, corpse:GetPhysicsObjectCount() - 1 do
+					local phys = corpse:GetPhysicsObjectNum( i )
+					phys:AddVelocity(VectorRand()*500)
+					phys:AddAngleVelocity(VectorRand()*720)
+				end
+			end end)
+			ent:SetParent(corpse)
+		--end
+		if ent.Gold64 && !ent.NPCDead then
 			if goldmult > 0 then
-				SpawnGold(ent, bignummult(ent.Gold64, goldmult))
-			end
-		end
-		if !noprogress then
-			if curzone % math.Round(cfg["game"]["zone_boss_interval"]) == 0 then
-				ParticleEffect("asplode_hoodoo", ent:GetPos(), Angle(0,0,0))
-				CompleteZone()
-			else
-				zonekills = zonekills + 1
-				if zonekills >= maxzonekills && !BombExists() then
-					CreateBomb(ent:GetPos() + Vector(0,0,15))
+				if ent.Prefix && curzone < 80 then --is the NPC to slay not normal?
+					ScatterGold(ent, bignummult(ent.Gold64, goldmult), math.random(4, 7), (ent.IsBoss or false)) --money firework!
+				else
+					SpawnGold(ent, bignummult(ent.Gold64, goldmult), (ent.IsBoss or false)) --packaged up into one nice stack.
 				end
 			end
 		end
-		ent:Remove()
+		if !noprogress then
+			zonekills = zonekills + 1
+			if zonekills >= maxzonekills && !BombExists() then
+				CreateBomb(ent:GetPos() + Vector(0,0,15))
+			end
+		end
+		ent.Damage64 = {0, 0}
+		ent.Gold64 = {0, 0}
+		ent.Health64 = {0, 0}
+		ent.MaxHealth64 = {0, 0}
+		ent.ActiveMat = "null"
+		ent:SetMaterial("null")
+		ent:SetSchedule(SCHED_DIE)
+		ent:SetCondition(67)
+		ent:SetCollisionGroup(COLLISION_GROUP_IN_VEHICLE)
+		ent.NPCDead = true
+		ent.ZeroDamage = true
+		ent:SetRenderMode(RENDERMODE_TRANSALPHA)
+		ent:SetColor(Color(0,0,0,0))
+		timer.Simple(timelim, function() if IsValid(ent) then
+			if #ent:GetChildren() > 0 then
+				for k, m in pairs(ent:GetChildren()) do
+					if not string.find(m:GetClass(), "mr_effect") then
+						BreakEntity(m)
+					end
+					m:Remove()
+				end
+			end
+			ent:Remove()
+		end end)
 	end
 end
+
+concommand.Add("forcerainbowchest", function(ply)
+	if ply:IsSuperAdmin() then
+		timeuntilnextchest = 0
+	end
+end)
 
 concommand.Add("hibernate", function(ply)
 	if ply:IsSuperAdmin() then
@@ -839,8 +1249,8 @@ end)
 
 concommand.Add("magnet", function(ply)
 	if ply:IsSuperAdmin() then
-		for k, ent in pairs(ents.FindByClass("ses_*")) do
-			if ent:GetClass() == "ses_pickup" then
+		for k, ent in pairs(ents.FindByClass("cw3_*")) do
+			if ent:GetClass() == "cw3_pickup" then
 				if ent.ItemID != -3 then
 					ent.ItemOwner = "unassigned"
 					ent.OneAtATime = nil
@@ -1022,6 +1432,7 @@ timer.Create("Decaytint",0.01,0,function()
 					if ((!IsValid(obj:GetPhysicsObject()) or obj:GetPhysicsObject():IsAsleep()) && !obj:IsRagdoll()) or (obj:IsRagdoll() && obj.ragdolltranq) or obj.InstantSoftRemove then
 					obj.IgnoreSoftRemove = 1
 					obj:SetCollisionGroup(COLLISION_GROUP_IN_VEHICLE)
+					obj:SetRenderMode(RENDERMODE_TRANSALPHA) --make sure we can make it transparent
 					for i = 1, 101 do
 						timer.Simple(i/13, function() if IsValid(obj) then
 							if i == 101 then 
@@ -1037,6 +1448,7 @@ timer.Create("Decaytint",0.01,0,function()
 									end
 								end
 								obj:SetPos(obj:GetPos()-Vector(0,0,i/5))
+								obj:SetColor(Color(obj:GetColor().r, obj:GetColor().g, obj:GetColor().b, math.max(0.01, obj:GetColor().a - 2.55)))
 							end
 						end end)
 					end
@@ -1048,7 +1460,10 @@ timer.Create("Decaytint",0.01,0,function()
 end)
 
 function GroundContact( ply, inWater, onFloater, speed )
-	--[[local sensitivity = 1
+	if inWater then return end
+	if Hibernating() then return end
+	if ply.IgnoreFallDamageAlways then return end
+	local sensitivity = 1
 	if game.GetMap() == "dm_lostarena" then
 		sensitivity = 0.55
 	end
@@ -1057,14 +1472,8 @@ function GroundContact( ply, inWater, onFloater, speed )
 	end
 	if ply.jumpboost > CurTime() then sensitivity = math.huge end
 	if speed > 750*sensitivity then
-		local intensity = math.ceil(speed/27.3*(1.13^ply:GetPlayerLevel()))
-		if intensity > math.floor(ply.MaxHealth64/5) or intensity > math.floor(ply.Health64/2) then
-			ply:EmitSound("rf/falldamage_heavy.wav")
-		else
-			ply:EmitSound("rf/falldamage.wav")
-		end
-		dmgpop(intensity, 12, ply)
-		ply.Health64 = math.max(1, ply.Health64 - intensity)
+		ply:EmitSound("rf/falldamage_heavy.wav")
+		if !ply.IgnoreFallDamageOnce then bignumdiv(ply.Health64, 1.5) end
 	end
 	if speed > 1000*sensitivity && !inWater then
 		local stuntime = 2*(1 + (speed/1000))
@@ -1080,8 +1489,12 @@ function GroundContact( ply, inWater, onFloater, speed )
 		end end)
 		if speed > 1500*sensitivity then --bonk!
 			ply.DontRegen = true
-			ply.Shield64 = 0
-			ply.Health64 = math.max(1,ply.Health64 - (ply.MaxHealth64/100*5))
+				if ply.IgnoreFallDamageOnce then
+					ply.IgnoreFallDamageOnce = nil
+				else
+					bignumdiv(ply.Health64, 5)
+					ply.healthstate = math.max(1, ply.healthstate - 1)
+				end
 				ply:EmitSound("rf/crush1.mp3")
 				for i = 1, 15 do
 					local concrete = ents.Create("prop_physics")
@@ -1107,11 +1520,8 @@ function GroundContact( ply, inWater, onFloater, speed )
 		SendPopoff("Stunned!", ply,Color(255,0,0),Color(255,255,0))
 		ply:CreateRagdoll()
 		local rag = ply:GetRagdollEntity()
-		if ply:SteamID() == "STEAM_0:1:45185922" or game.SinglePlayer then
-			timer.Simple(0, function() if IsValid(rag) then rag:SetSubMaterial(0, "models/player/shared/gold_player") end end)
-		end
 		timer.Simple(stuntime, function() if IsValid(rag) then rag:Remove() end end)
-	end]]
+	end
 end
 
 hook.Add("OnPlayerHitGround", "craftworld3_FALLDAMAGE", GroundContact)
@@ -1260,8 +1670,14 @@ function spawntext(str, ent, element, size, lifetime, usetfnumbers)
 	end
 end
 
+function DamageNumber(ent, num)
+	if !ent.DamageTally then ent.DamageTally = {0, 0} end
+	bignumadd(ent.DamageTally, num)
+	timer.Create(tostring(ent) .. "dmgnum", 0, 1, function() if IsValid(ent) then if ent.DamageTally then SendPopoff("-" .. bignumwrite(ent.DamageTally), ent, Color(255,0,0), Color(255,199,199)) ent.DamageTally = nil end end end)
+end
+
 function GetZoneCubeValue()
-	return {bignumconvert(math.Round((25 * (1.04^curzone))/8) + math.random(0,5*curzone)),bignumconvert(math.Round((25 * (1.04^(curzone-25)))/8) + math.random(0,2*curzone))}
+	return {bignumconvert(math.max(math.Round((25 * (1.04^curzone))/8) + math.random(0,5*curzone),1)),bignumconvert(math.max(math.Round((25 * (1.04^(curzone-25)))/8) + math.random(0,2*curzone), 1))}
 end
 
 function ownerlog(msg)
@@ -1272,15 +1688,15 @@ function NewSave(ply)
 	if !ply:IsPlayer() then return end
 	ply:StripWeapons()
 	ply:StripAmmo()
-	local dir = "craftworld3/" .. string.Replace(ply:SteamID64(), ".", "_")
+	local dir = sdir .. "/" .. string.Replace(ply:SteamID64(), ".", "_")
 	file.CreateDir(dir)
 		file.Write(dir .. "/initialjoin.txt", os.date( "Save created at %H:%M:%S BST on %d/%m/%Y" , os.time() ))
 		ownerlog("CREATING NEW SAVE DATA: " .. ply:Nick() .. " [" .. ply:SteamID64() .. "]")
 		ownerlog(os.date( "Save created at %H:%M:%S BST on %d/%m/%Y" , os.time() ))
 		local heroes
 		local account
-		account = { ["gold"] = {0, 0}, ["timecubes"] = {0, 0}, ["weaponcubes"] = {0, 0}, ["prices"] = {{80, 0}, {15, 1}, {600, 2}, {75, 3}, {400, 5}, {245, 8}, {500, 11}, {800, 20}, {335, 35}, {500, 50}}, ["health"] = bignumread("125"), ["shield"] = bignumread("90"), ["level"] = {1,0,0,0,0,0,0,0,0,0}, ["investment"] = {0, 0}, ["points"] = {0,0,0,0} }
-		heroes = { ["primaryweapon"] = {["class"] = "weapon_smg1", ["dmg"] = bignumread("10"), ["level"] = {1,0,0,0,0,0,0,0,0,0}, ["prices"] = {{40, 0}, {3, 1}, {200, 2}, {35, 3}, {200, 5}, {75, 8}, {90, 11}, {410, 20}, {35, 35}, {50, 50}}, ["investment"] = {0, 0}}, ["secondaryweapon"] = {["class"] = "weapon_pistol", ["dmg"] = bignumread("13"), ["level"] = {1,0,0,0,0,0,0,0,0,0}, ["prices"] = {{40, 0}, {3, 1}, {200, 2}, {35, 3}, {200, 5}, {75, 8}, {90, 11}, {410, 20}, {35, 35}, {50, 50}}, ["investment"] = {0, 0}}, ["meleeweapon"] = {["class"] = "weapon_crowbar", ["dmg"] = bignumread("32"), ["level"] = {1,0,0,0,0,0,0,0,0,0}, ["prices"] = {{40, 0}, {3, 1}, {200, 2}, {35, 3}, {200, 5}, {75, 8}, {90, 11}, {410, 20}, {35, 35}, {50, 50}}, ["investment"] = {0, 0}} }
+		account = { ["gold"] = {0, 0}, ["timecubes"] = {0, 0}, ["weaponcubes"] = {0, 0}, ["healthcubes"] = {0, 0}, ["shieldcubes"] = {0, 0}, ["prices"] = {{80, 0}, {15, 1}, {600, 2}, {75, 3}, {400, 5}, {245, 8}, {500, 11}, {800, 20}, {335, 35}, {500, 50}}, ["health"] = bignumread("7"), ["shield"] = bignumread("3"), ["block"] = bignumread("12"), ["level"] = {1,0,0,0,0,0,0,0,0,0}, ["fistslevel"] = {1,0,0,0,0,0,0,0,0,0}, ["investment"] = {0, 0}, ["points"] = {0,0,0,0,0,0,0,0,0} }
+		heroes = { [1] = {["active"] = true, ["evolution"] = 1, ["maxed"] = false, ["originalclass"] = "tfa_cso_mp7a1", ["class"] = "tfa_cso_mp7a1", ["dmg"] = bignumread("0.67"), ["power"] = bignumread("0.67"), ["level"] = {1,0,0,0,0,0,0,0,0,0}, ["prices"] = {{40, 0}, {3, 1}, {200, 2}, {35, 3}, {200, 5}, {75, 8}, {90, 11}, {410, 20}, {35, 35}, {50, 50}}, ["investment"] = {0, 0}}, [2] = {["active"] = true, ["evolution"] = 1, ["maxed"] = true, ["originalclass"] = "tfa_cso_automagv", ["class"] = "tfa_cso_automagv", ["dmg"] = bignumread("0.83"), ["power"] = bignumread("0.83"), ["level"] = {1,0,0,0,0,0,0,0,0,0}, ["prices"] = {{40, 0}, {3, 1}, {200, 2}, {35, 3}, {200, 5}, {75, 8}, {90, 11}, {410, 20}, {35, 35}, {50, 50}}, ["investment"] = {0, 0}}, [3] = {["active"] = true, ["evolution"] = 1, ["maxed"] = true, ["originalclass"] = "tfa_cso_sealknife", ["class"] = "tfa_cso_sealknife", ["dmg"] = bignumread("2"), ["power"] = bignumread("2"), ["level"] = {1,0,0,0,0,0,0,0,0,0}, ["prices"] = {{40, 0}, {3, 1}, {200, 2}, {35, 3}, {200, 5}, {75, 8}, {90, 11}, {410, 20}, {35, 35}, {50, 50}}, ["investment"] = {0, 0}} }
 		ownerlog("WRITING HERO DATA FOR " .. ply:SteamID64())
 		file.Write(dir .. "/herodata.txt", util.TableToJSON(heroes))
 		ownerlog("WRITING ACCOUNT DATA FOR " .. ply:SteamID64())
@@ -1289,15 +1705,41 @@ function NewSave(ply)
 		ply.herodata = heroes
 		ply.accountdata = account
 		ply:Rationalise(true)
-		ply.Armour64 = {0, 0}
+		ply:RefreshWeapons()
 end
 
 concommand.Add("craftworld3_wipesave", function(ply)
-	NewSave(ply)
+	if !ply.CodeBusy then
+		ply.CodeBusy = true
+		NewSave(ply)
+		ply.Godmode = true
+		ply:EmitSound("rf/ko2.mp3", 135, 100)
+		ply:EmitSound("rf/eliminated.wav", 135, 80)
+		Announce(ply:Nick() .. " bids farewell to this cruel world.", Color(255,0,0), Color(68,0,0), 3)
+		ply:CreateRagdoll()
+		ply:SetNoDraw(true)
+		ply.healthstate = 0
+		ply:Freeze(true)
+		timer.Simple(10, function() if IsValid(ply) then
+			local spawns = ents.FindByClass("info_player_start")
+			if #spawns > 0 then
+				ply:SetPos(spawns[math.random(#spawns)]:GetPos())
+				WarpFX(ply)
+			end
+			if IsValid(ply:GetRagdollEntity()) then ply:GetRagdollEntity():Remove() end
+			ply:SetNoDraw(false)
+			ply.healthstate = 5
+			ply:Freeze(false)
+			ply.Godmode = false
+			ply.CodeBusy = false
+		end end)
+	end
 end)
 
 hook.Add("PlayerInitialSpawn","craftworld3_LOADDATA", function(ply)
-	timer.Simple(1, function() if IsValid(ply) then ply:LoadCraftworldData() ply.Armour64 = {0, 0} end end)
+	ply:LoadCraftworldData()
+	timer.Simple(1, function() if IsValid(ply) then ply:Rationalise(true) end end)
+	timer.Simple(3, function() ResetZone() end)
 end)
 
 hook.Add("PlayerSpawn","craftworld3_PLAYERSPAWN", function(ply)
@@ -1307,7 +1749,7 @@ end)
 local ply = FindMetaTable( "Player" )
 
 function ply:LoadCraftworldData()
-	local dir = "craftworld3/" .. string.Replace(self:SteamID64(), ".", "_")
+	local dir = sdir .. "/" .. string.Replace(self:SteamID64(), ".", "_")
 	file.CreateDir(dir)
 	if !file.Exists(dir .. "/initialjoin.txt", "DATA") then
 		NewSave(self)
@@ -1360,9 +1802,9 @@ concommand.Add("setzone", function(ply,cmd,args)
 end)
 
 function ply:RecoverPulses(qty)
-	self.healthstate = math.Clamp(self.healthstate, 1, 5)
+	self.healthstate = math.Clamp(self.healthstate + qty, 1, 5)
 	for i = 1, qty do
-		local pulse = ents.Create("ses_pickup")
+		local pulse = ents.Create("cw3_pickup")
 		pulse.ItemID = -1
 		pulse:SetPos(self:GetPos())
 		pulse:Spawn()
@@ -1371,10 +1813,13 @@ function ply:RecoverPulses(qty)
 end
 
 function ply:GainGold(gold)
+	SendPopoff("+$" .. bignumwrite(gold), self, Color(255,255,0), Color(0,139,0))
 	bignumadd(self.accountdata["gold"], gold)
 end
 
 function ply:SpendGold(gold)
+	self:EmitSound("mvm/mvm_bought_upgrade.wav")
+	SendPopoff("-$" .. bignumwrite(gold), self, Color(255,255,0), Color(189,0,0))
 	bignumsub(self.accountdata["gold"], gold)
 end
 
@@ -1383,6 +1828,9 @@ function ply:GainTimeCubes(timecubes)
 end
 
 function ply:SpendTimeCubes(timecubes)
+	self:EmitSound("mvm/mvm_bought_upgrade.wav")
+	self:EmitSound("rf/power_use.wav")
+	SendPopoff("-g" .. bignumwrite(timecubes), self, Color(0,117,255), Color(189,0,0))
 	bignumsub(self.accountdata["timecubes"], timecubes)
 end
 
@@ -1391,13 +1839,16 @@ function ply:GainWeaponCubes(weaponcubes)
 end
 
 function ply:SpendWeaponCubes(weaponcubes)
+	self:EmitSound("mvm/mvm_bought_upgrade.wav")
+	self:EmitSound("rf/power_use.wav")
+	SendPopoff("-c" .. bignumwrite(weaponcubes), self, Color(0,193,0), Color(189,0,0))
 	bignumsub(self.accountdata["weaponcubes"], weaponcubes)
 end
 
 function ply:GiveCubes(variant, qty, emit)
 	if !variant then variant = 1 end
 	if !qty then qty = 1 end
-	if !emit then emit = self:GetPos() end
+	if !emit then emit = self:GetPos() + self:OBBCenter() end
 	if isnumber(qty) then
 		qty = math.Round(qty)
 		qty = bignumconvert(qty)
@@ -1409,13 +1860,16 @@ function ply:GiveCubes(variant, qty, emit)
 		self:GainTimeCubes(qty)
 	end
 	local colors = {Color(0,117,255), Color(0,193,0)}
-	local msgs = {"Time", "Weapon"}
-	local num1 = qty[1]
-	local num2 = math.floor(qty[1]/100)
+	local msgs = {"g", "c"}
+	SendPopoff(bignumwrite(qty) .. " " .. msgs[variant] .. "Cubes",self,colors[variant],Color(255,255,0))
+	local quantity = qty[1]
+	quantity = math.Clamp(quantity, 1, 100)
+	local num1 = quantity
+	local num2 = math.floor(quantity/100)
 	num1 = num1 - (num2*100)
 	num2 = num2 + (qty[2]*10)
-	for a = 1, num1 do
-		local cube = ents.Create("ses_pickup")
+	for a = 1, math.min(num1,16) do
+		local cube = ents.Create("cw3_pickup")
 		cube:SetPos(emit)
 		cube.Qty = {1, 0}
 		cube.ItemID = variant
@@ -1423,16 +1877,81 @@ function ply:GiveCubes(variant, qty, emit)
 		timer.Simple(0, function() if IsValid(self) then cube:Use(self,self,3,1) end end)
 	end
 	for b = 1, num2 do
-		local cube = ents.Create("ses_pickup")
+		local cube = ents.Create("cw3_pickup")
 		cube:SetPos(emit)
 		cube.Qty = {100, 0}
-		cube:SetModelScale(3)
 		cube.ItemID = variant
 		cube:Spawn()
 		timer.Simple(0, function() if IsValid(self) then cube:Use(self,self,3,1) end end)
 	end
-	SendPopoff(bignumwrite(qty) .. " " .. msgs[variant] .. " Cubes",self,colors[variant],Color(255,255,0))
 end
+
+function ply:RewardWeapon(weapon, dmg)
+	local wepdata = weapons.Get(weapon)
+	local weapon2 = weapon
+	if !wepdata then return end
+	if !self:OwnsWeapon(weapon) then
+		local maxevoalready = true
+		if LookupMaxEvo(weapon) > 1 then maxevoalready = false end
+		self:EmitSound("rf/omega.wav", 122, 36)
+		self:EmitSound("rf/omega.wav", 122, 36)
+		Announce("Acquired a new weapon: " .. wepdata.PrintName, Color(255,255,0), Color(0,0,255), 8, self)
+		local randomstrength = dmg or bignumcalc({math.Rand(13,52)*(1.03^curzone),0})
+		table.insert(self.herodata, {["active"] = true, ["evolution"] = 1, ["maxed"] = maxevoalready, ["originalclass"] = weapon, ["class"] = weapon2, ["dmg"] = bignumcopy(randomstrength), ["power"] = bignumcopy(randomstrength), ["level"] = {1,0,0,0,0,0,0,0,0,0}, ["prices"] = {{40, 0}, {3, 1}, {200, 2}, {35, 3}, {200, 5}, {75, 8}, {90, 11}, {410, 20}, {35, 35}, {50, 50}}, ["investment"] = {0, 0}})
+		self:RefreshWeapons()
+	elseif self:WeaponActive(weapon) then
+		local strength = dmg or bignumcalc({math.Rand(13,52)*(1.03^curzone),0})
+		if bignumcompare(strength, self.herodata[self:GetWeaponIndex(weapon)]["power"]) == 1 then
+			self.herodata[self:GetWeaponIndex(weapon)]["level"] = {1, 0, 0, 0, 0, 0, 0, 0, 0, 0}
+			self.herodata[self:GetWeaponIndex(weapon)]["dmg"] = bignumcopy(strength)
+			self.herodata[self:GetWeaponIndex(weapon)]["power"] = bignumcopy(strength)
+			self.herodata[self:GetWeaponIndex(weapon)]["prices"] = {{40, 0}, {3, 1}, {200, 2}, {35, 3}, {200, 5}, {75, 8}, {90, 11}, {410, 20}, {35, 35}, {50, 50}}
+			self:GainGold(self.herodata[self:GetWeaponIndex(weapon)]["investment"])
+			self.herodata[self:GetWeaponIndex(weapon)]["investment"] = {0, 0}
+			self:EmitSound("rf/upgradetraining.wav", 122, 50)
+			self:EmitSound("rf/upgradetraining.wav", 122, 50)
+			Announce("Weapon Power improved: " .. wepdata.PrintName, Color(255,0,255), Color(0,255,255), 8, self)
+		elseif not self.herodata[self:GetWeaponIndex(weapon)]["maxed"] then
+			local maxevo = LookupMaxEvo(weapon)
+			if self.herodata[self:GetWeaponIndex(weapon)]["evolution"] < maxevo then
+				Announce("Weapon evolved: " .. wepdata.PrintName, Color(255,0,255), Color(0,255,255), 8, self)
+				self:EmitSound("rf/suitchest_open.wav", 122)
+				self:EmitSound("rf/suitchest_open.wav", 122)
+				self.herodata[self:GetWeaponIndex(weapon)]["evolution"] = self.herodata[self:GetWeaponIndex(weapon)]["evolution"] + 1
+				self.herodata[self:GetWeaponIndex(weapon)]["class"] = weaponevos[self.herodata[self:GetWeaponIndex(weapon)]["originalclass"]][self.herodata[self:GetWeaponIndex(weapon)]["evolution"] - 1]
+				self:RefreshWeapons()
+			else
+				self:GiveCubes(2, bignumcalc({20*curzone, 0}))
+			end
+			if self.herodata[self:GetWeaponIndex(weapon)]["evolution"] >= maxevo && not self.herodata[self:GetWeaponIndex(weapon)]["maxed"] then
+				self:EmitSound("rf/prestige_ready.mp3", 122, 80)
+				self:EmitSound("rf/prestige_ready.mp3", 122, 80)
+				Announce("Weapon maxed out: " .. wepdata.PrintName, Color(255,0,255), Color(0,255,255), 8, self)
+				self.herodata[self:GetWeaponIndex(weapon)]["maxed"] = true
+			end
+		else
+			self:GiveCubes(2, bignumcalc({20*curzone, 0}))
+		end
+	else
+		self:EmitSound("rf/prestige_ready.mp3", 122, 110)
+		self:EmitSound("rf/prestige_ready.mp3", 122, 110)
+		Announce("Weapon re-acquired: " .. wepdata.PrintName, Color(255,0,255), Color(0,255,255), 8, self)
+		self.herodata[self:GetWeaponIndex(weapon)]["active"] = true
+		self:RefreshWeapons()
+	end
+	self:SaveCraftworldData()
+end
+
+function SpawnWeapon(pos, weapon, lockto)
+	local data = weapons.Get(weapon)
+	local username = ""
+	if lockto then
+		if lockto:IsPlayer() then username = "Belongs to " .. lockto:Name() end
+	end
+	CustomPickup(pos, data.PrintName, username, data.WorldModel or "models/items/item_item_crate.mdl", "", "rf/pistol.wav", 100, 1, 7, true, lockto, nil, function(p) p.WeaponDrop = true p.WeaponClass = weapon p.RndDmg = bignumcalc({math.Rand(1.3,5.2)*(1.03^curzone),0}) p.PickupName = "[Power " .. bignumwrite(p.RndDmg) .. "] " .. p.PickupName end)
+end
+
+--CustomPickup(spawnpos, name, desc, model, material, snd, pitch, size, rarity, physics, lockto, funct, spawnfunct)
 
 function ply:GetSaveHP()
 	return self.accountdata["health"]
@@ -1440,6 +1959,10 @@ end
 
 function ply:GetSaveSP()
 	return self.accountdata["shield"]
+end
+
+function ply:GetSaveBP()
+	return self.accountdata["block"]
 end
 
 function ply:SetSaveHP(var)
@@ -1450,113 +1973,128 @@ function ply:SetSaveSP(var)
 	self.accountdata["shield"] = var
 end
 
-function ply:GetEffectiveLevel()
-	return self.accountdata["level"][1] + (self.accountdata["level"][2] * (5 + self:GetSpecOps())) + (self.accountdata["level"][3] * (25 + self:GetSpecOps())) + (self.accountdata["level"][4] * (15 + (self:GetSpecOps()*25))) + (self.accountdata["level"][5] * 1275)
+function ply:SetSaveBP(var)
+	self.accountdata["block"] = var
 end
 
-function ply:GetSpecOps()
-	return self.accountdata["level"][5]
+function ply:OwnsWeapon(weapon)
+	local result = false
+	for i = 1, #self.herodata do
+		if self.herodata[i]["originalclass"] == weapon then
+			result = true
+		end
+	end
+	return result
 end
 
-function ply:GetInventoryWeapons()
-	return {self.herodata["primaryweapon"]["class"], self.herodata["secondaryweapon"]["class"], self.herodata["meleeweapon"]["class"]}
+function ply:WeaponActive(weapon)
+	local result = false
+	if self:OwnsWeapon(weapon) then --the weapon has to exist in their save data obviously
+		for i = 1, #self.herodata do
+			if self.herodata[i]["originalclass"] == weapon then
+				result = self.herodata[i]["active"]
+			end
+		end
+	end
+	return result
 end
 
-function ply:GetWeaponDamage()
-	return {self.herodata["primaryweapon"]["dmg"], self.herodata["secondaryweapon"]["dmg"], self.herodata["meleeweapon"]["dmg"]}
+function ply:GetBaseWeapon(weapon)
+	local result = weapon --return the input if something goes wrong
+	for i = 1, #self.herodata do
+		if self.herodata[i]["class"] == weapon then
+			result = self.herodata[i]["originalclass"]
+		end
+	end
+	return result
 end
 
-function ply:GetWeaponLevel()
-	return {self.herodata["primaryweapon"]["level"], self.herodata["secondaryweapon"]["level"], self.herodata["meleeweapon"]["level"]}
+function ply:GetWeaponIndex(weapon)
+	local index = 0
+	for i = 1, #self.herodata do
+		if self.herodata[i]["class"] == weapon or self.herodata[i]["originalclass"] == weapon then
+			index = i
+		end
+	end
+	if index != 0 then return index else return nil end
+end
+
+function IsInvincible(ent)
+	if ent.Godmode or ent.CheatGodmode or ent.GuardianAngel or ent.TimedGodmode then
+		return true
+	else
+		return false
+	end
 end
 
 function ply:Rationalise(heal)
 	self.MaxHealth64 = self:GetSaveHP()
 	self.MaxShield64 = self:GetSaveSP()
+	self.MaxBlock64 = self:GetSaveBP()
 	if heal then
 		self.Health64 = bignumcopy(self.MaxHealth64)
 		self.Shield64 = bignumcopy(self.MaxShield64)
-		self.Armour64 = {0, 0}
-	end
-	for i = 1, 3 do
-		if !self:HasWeapon(self:GetInventoryWeapons()[i]) then
-			for a, c in pairs(self:GetWeapons()) do
-				if c.InventoryIndex then
-					if c.InventoryIndex == i then
-						self:DropWeapon(c)
-					end
-				end
-			end
-			local wep = self:Give(self:GetInventoryWeapons()[i], false)
-			self:GiveAmmo(wep:GetMaxClip1() * 2, wep:GetPrimaryAmmoType())
-			wep.InventoryIndex = i
-		end
+		self.Block64 = bignumcopy(self.MaxBlock64)
 	end
 	self:SaveCraftworldData()
 end
 
-function ply:SetLv(lvtype, int)
+function ply:RefreshWeapons()
+	self:StripWeapons()
+	for i = 1, #self.herodata do
+		if self.herodata[i]["active"] then
+			if !self:HasWeapon(self.herodata[i]["class"]) then
+				local wep = self:Give(self.herodata[i]["class"], true)
+				wep:SetClip1(wep:GetMaxClip1())
+				wep.InventoryIndex = i
+				if self:GetAmmoCount(wep:GetPrimaryAmmoType()) < wep:GetMaxClip1() * 3 then --resupply the player's ammunition to a minimum of 3x mag size if it's too low
+					self:GiveAmmo((wep:GetMaxClip1() * 3) - self:GetAmmoCount(wep:GetPrimaryAmmoType()), wep:GetPrimaryAmmoType(), false)
+				end
+			end
+		end
+	end
+end
+
+function ply:SetLv(lvtype, int, nofx)
 	lvtype = math.Clamp(lvtype,1,10)
 	local plylv = self.accountdata["level"]
 	local restore = false
 	local types = {"Level", "Rank", "Star", "Grade", "Spec Ops", "Class", "Stage", "Quality", "Echelon", "Tier"}
 	local messages = {"Level Up", "Upgrade", "Promotion", "Training", "Spec Ops", "Reclassification", "Advancement", "Improvement", "Empowerment", "Ameliorate"}
 	local snds = {"level","rank","star","training","specops","training","training","star","specops","training"}
+	local fx = {"mr_effect4", "mr_effect31", "mr_effect25", "mr_effect106_3", "mr_effect60", "mr_effect94", "mr_effect110", "mr_effect111", "mr_effect105", "mr_effect1"}
 	local colours = {Color(0,87,255), Color(255,187,0), Color(0,255,0), Color(255,67,0), Color(32,32,32), Color(255,0,255), Color(0,255,255), Color(72,155,72), Color(255,255,255), Color(127,0,0)}
 	if plylv[lvtype] < int then
-		for i = 1, 4*lvtype do
-			local particle = ents.Create("prop_physics")
-			particle:SetModel("models/pac/default.mdl")
-			particle:SetColor(colours[lvtype])
-			particle:PhysicsInit(SOLID_VPHYSICS)
-			particle:SetSolid(SOLID_VPHYSICS)
-			particle:SetCollisionGroup(COLLISION_GROUP_IN_VEHICLE)
-			particle:SetPos(self:GetPos() + self:OBBCenter())
-			particle:Spawn()
-			timer.Simple(0, function() if IsValid(particle) then if IsValid(particle:GetPhysicsObject()) then particle:GetPhysicsObject():SetVelocity(VectorRand()*750) end end end)
-			timer.Simple(1 + lvtype, function() if IsValid(particle) then particle:SetModelScale(0.001, 1) end end)
-			timer.Simple(2 + lvtype, function() if IsValid(particle) then particle:Remove() end end)
+		if self.accountdata["leveltutorial"] == nil then
+			self.accountdata["leveltutorial"] = true
+			Announce("Leveling up increases maximum health, shield, and block integrity.", Color(0, 255, 0), Color(0,0,93), 7, self)
+			Announce("The big white number at the top left of the HUD is your Power.", Color(0, 255, 0), Color(0,0,93), 7, self)
+			Announce("Power is an average measurement of threat and strength.", Color(0, 255, 0), Color(0,0,93), 7, self)
+			Announce("But beware; Power only PREDICTS total strength. It's not entirely accurate!", Color(255, 0, 0), Color(0,0,93), 7, self)
+			Announce("Reach certain level milestones to unlock alternative leveling systems.", Color(255, 255, 0), Color(0,0,93), 7, self)
 		end
-		local factors = {1, 5 + (plylv[lvtype]), 35 * (plylv[lvtype]*2), 45 * (plylv[lvtype] + 1), math.min(math.ceil(235 * (1.13^(plylv[lvtype]))),1000), math.min(math.ceil(600 * (1.16^(plylv[lvtype]))), 1600), 1800, 2000, 2200, 2500}
+		if TrueCraftling() then ResetZone() end --re-scale the power of enemies
+		timer.Create(self:SteamID() .. "upgradefx" .. lvtype, 0.1, 1, function() if IsValid(self) then --do it on timer.Create so that particle FX don't spam
+			AttachVisualTemp((lvtype/5) + 2, self, fx[lvtype])
+		end end)
+		local factors = {1, 5 + (plylv[lvtype]), 35 * (plylv[lvtype]*2 + 1), 45 * (plylv[lvtype] + 1), math.min(math.ceil(235 * (1.13^(plylv[lvtype]))),1000), math.min(math.ceil(600 * (1.16^(plylv[lvtype]))), 1600), 1800, 2000, 2200, 2500}
 		local amplifier = factors[lvtype]
+		local checks = {10, 100, 500, 1000, 2000, 3000, 4000, 6000, 10000}
 		for i = 1, int - plylv[lvtype] do
 			for c = 1, amplifier do
-				self:SetSaveHP(bignummult(self:GetSaveHP(), 1.13))
-				self:SetSaveSP(bignummult(self:GetSaveSP(), 1.13))
+				self:SetSaveHP(bignummult(self:GetSaveHP(), 1.013 + (((plylv[lvtype] + c)/100) * lvtype)))
+				self:SetSaveSP(bignummult(self:GetSaveSP(), 1.013 + (((plylv[lvtype] + c)/100) * lvtype)))
+				self:SetSaveBP(bignummult(self:GetSaveBP(), 1.013 + (((plylv[lvtype] + c)/100) * lvtype)))
 			end
 			if lvtype == 1 then
-				if !self.accountdata["points"] then self.accountdata["points"] = {0,0,0,0} end
-				if (plylv[1]+i) % 10 == 0 then
-					SendPopoff("Upgrade Ready", self, colours[2], Color(255,255,0))
-					self:EmitSound("rf/prestige_ready.mp3", 95, 100)
-					self:EmitSound("rf/prestige_ready.mp3", 95, 100)
-					self:EmitSound("rf/evolve_v2.mp3", 95, 75)
-					self:EmitSound("rf/evolve_v2.mp3", 95, 75)
-					self.accountdata["points"][1] = self.accountdata["points"][1] + 1
-				end
-				if (plylv[1]+i) % 100 == 0 then
-					SendPopoff("Promotion Ready", self, colours[3], Color(255,255,0))
-					self:EmitSound("rf/prestige_ready.mp3", 95, 100)
-					self:EmitSound("rf/prestige_ready.mp3", 95, 100)
-					self:EmitSound("rf/evolve_v2.mp3", 95, 75)
-					self:EmitSound("rf/evolve_v2.mp3", 95, 75)
-					self.accountdata["points"][2] = self.accountdata["points"][2] + 1
-				end
-				if (plylv[1]+i) % 500 == 0 then
-					SendPopoff("Training Ready", self, colours[4], Color(255,255,0))
-					self:EmitSound("rf/prestige_ready.mp3", 95, 100)
-					self:EmitSound("rf/prestige_ready.mp3", 95, 100)
-					self:EmitSound("rf/evolve_v2.mp3", 95, 75)
-					self:EmitSound("rf/evolve_v2.mp3", 95, 75)
-					self.accountdata["points"][3] = self.accountdata["points"][3] + 1
-				end
-				if (plylv[1]+i) % 1000 == 0 then
-					SendPopoff("Spec Ops Ready", self, colours[5], Color(255,255,0))
-					self:EmitSound("rf/prestige_ready.mp3", 95, 100)
-					self:EmitSound("rf/prestige_ready.mp3", 95, 100)
-					self:EmitSound("rf/evolve_v2.mp3", 95, 75)
-					self:EmitSound("rf/evolve_v2.mp3", 95, 75)
-					self.accountdata["points"][4] = self.accountdata["points"][4] + 1
+				if !self.accountdata["points"] then self.accountdata["points"] = {0,0,0,0,0,0,0,0,0} end
+				for b = 1, 9 do
+					if (plylv[1]+i) % checks[b] == 0 then
+						SendPopoff(messages[b+1] .. " Ready", self, colours[b+1], Color(255,255,0))
+						self:EmitSound("rf/prestige_ready.mp3", 95, 100)
+						self:EmitSound("rf/evolve_v2.mp3", 95, 75)
+						self.accountdata["points"][b] = self.accountdata["points"][b] + 1
+					end
 				end
 			end
 		end
@@ -1569,51 +2107,69 @@ function ply:SetLv(lvtype, int)
 	self:SaveCraftworldData()
 end
 
-function ply:GetCurrentWeaponData()
-	if !IsValid(self:GetActiveWeapon()) then return nil end
+function ply:CurrentWeapon()
+	local somethingwentwrong = true
 	if !self:GetActiveWeapon().InventoryIndex then return nil end
 	local class = self:GetActiveWeapon():GetClass()
-	if self.herodata["primaryweapon"]["class"] == class then
-		return self.herodata["primaryweapon"]
-	elseif self.herodata["secondaryweapon"]["class"] == class then
-		return self.herodata["secondaryweapon"]
-	elseif self.herodata["meleeweapon"]["class"] == class then
-		return self.herodata["meleeweapon"]
-	else
-		return nil
+	for i = 1, #self.herodata do
+		if self.herodata[i]["class"] == class then
+			somethingwentwrong = false
+			return self.herodata[i]
+		end
+	end
+	if somethingwentwrong then
+		cw3error("ply:CurrentWeapon - inventory index defined, but no matches in player's save data")
 	end
 end
 
-function ply:SetWepLv(wep, lvtype, int)
-	if !wep:IsWeapon() then return end
-	if wep:GetOwner() != self then return end
-	if self:GetCurrentWeaponData() == nil then return end
+function ply:GetWepEvo(weapon, indexbycurrentclass)
+	if not self:OwnsWeapon(weapon) then return nil end
+	local indexby = "originalclass"
+	local evolution = 1
+	if indexbycurrentclass then indexby = "class" end
+	for i = 1, #self.herodata do
+		if self.herodata[i][indexby] == weapon then
+			evolution = self.herodata[i]["evolution"]
+		end
+	end
+	return evolution
+end
+
+function LookupMaxEvo(weapon)
+	local maxevo = 1
+	for i = 1, #wpns do
+		if wpns[i] == weapon then
+			if weaponevos[weapon] != nil then
+				maxevo = 1 + #weaponevos[weapon]
+			end
+		end
+	end
+	return maxevo
+end
+
+function ply:SetWepLv(wep, lvtype, int, nofx)
+	if !wep:IsWeapon() then cw3error("ply:SetWepLv - argument #1 is not a weapon") end
+	if wep:GetOwner() != self then cw3error("ply:SetWepLv - argument #1 is a weapon that belongs to a different player") end
+	if self:CurrentWeapon() == nil then return end
 	self:SelectWeapon(wep:GetClass()) --make sure the weapon to upgrade is the current one
-	local data = self:GetCurrentWeaponData()
+	local data = self:CurrentWeapon()
 	lvtype = math.Clamp(lvtype,1,10)
 	local weplv = data["level"]
 	local types = {"Level", "Rank", "Star", "Grade", "Spec Ops", "Class", "Stage", "Quality", "Echelon", "Tier"}
 	local messages = {"Level Up", "Upgrade", "Promotion", "Training", "Spec Ops", "Reclassification", "Advancement", "Improvement", "Empowerment", "Ameliorate"}
 	local snds = {"level","rank","star","training","specops","training","training","star","specops","training"}
+	local fx = {"mr_effect4", "mr_effect31", "mr_effect25", "mr_effect106_3", "mr_effect60", "mr_effect94", "mr_effect110", "mr_effect111", "mr_effect105", "mr_effect1"}
 	local colours = {Color(0,87,255), Color(255,187,0), Color(0,255,0), Color(255,67,0), Color(32,32,32), Color(255,0,255), Color(0,255,255), Color(72,155,72), Color(255,255,255), Color(127,0,0)}
 	if weplv[lvtype] < int then
-		for i = 1, 4*lvtype do
-			local particle = ents.Create("prop_physics")
-			particle:SetModel("models/pac/default.mdl")
-			particle:SetColor(colours[lvtype])
-			particle:PhysicsInit(SOLID_VPHYSICS)
-			particle:SetSolid(SOLID_VPHYSICS)
-			particle:SetCollisionGroup(COLLISION_GROUP_IN_VEHICLE)
-			particle:SetPos(self:GetPos() + self:OBBCenter())
-			particle:Spawn()
-			timer.Simple(0, function() if IsValid(particle) then if IsValid(particle:GetPhysicsObject()) then particle:GetPhysicsObject():SetVelocity(VectorRand()*750) end end end)
-			timer.Simple(1 + lvtype, function() if IsValid(particle) then particle:SetModelScale(0.001, 1) end end)
-			timer.Simple(2 + lvtype, function() if IsValid(particle) then particle:Remove() end end)
-		end
-		local factors = {1, 5 + (weplv[lvtype]), 35 * (weplv[lvtype]*2), 45 * (weplv[lvtype] + 1), math.min(math.ceil(235 * (1.13^(weplv[lvtype]))),1000), math.min(math.ceil(600 * (1.16^(weplv[lvtype]))), 1600), 1800, 2000, 2200, 2500}
-		local amplifier = factors[lvtype]
-		for c = 1, amplifier do
-			data["dmg"] = bignummult(data["dmg"], 1.13)
+		timer.Create(self:SteamID() .. "upgradefx" .. lvtype, 0.1, 1, function() if IsValid(self) then --do it on timer.Create so that particle FX don't spam
+			AttachVisualTemp((lvtype/5) + 2, self, fx[lvtype])
+		end end)
+		if wep:GetClass() != "weapon_fists" then --fists are automatically scaled to match player strength
+			local factors = {1, 5 + (weplv[lvtype]), 35 * (weplv[lvtype]*2 + 1), 45 * (weplv[lvtype] + 1), math.min(math.ceil(235 * (1.13^(weplv[lvtype]))),1000), math.min(math.ceil(600 * (1.16^(weplv[lvtype]))), 1600), 1800, 2000, 2200, 2500}
+			local amplifier = factors[lvtype]
+			for c = 1, amplifier do
+				data["dmg"] = bignummult(data["dmg"], 1.013 + (((weplv[lvtype] + c)/100) * lvtype))
+			end
 		end
 		SendPopoff(wep:GetPrintName() .. " " .. messages[lvtype] .. " | " .. types[lvtype] .. " " .. string.Comma(int), self, colours[lvtype], Color(127,0,0))
 		self:EmitSound("rf/upgrade" .. snds[lvtype] .. ".wav", 110, 100 - ((int - weplv[lvtype])/10))
@@ -1622,56 +2178,60 @@ function ply:SetWepLv(wep, lvtype, int)
 	self:SaveCraftworldData()
 end
 
-function ply:ShopBuy(level, wep)
+function ply:ShopBuy(level, wep, nofx)
 	if wep then
 		if !IsValid(wep) then return end
-		if !wep:IsWeapon() then return end
+		if !wep:IsWeapon() then cw3error("ShopBuy - argument #2 is not a weapon") end
+		if wep:GetClass() == "gmod_tool" then return end
+		if wep:GetClass() == "weapon_fists" then return end
 		self:SelectWeapon(wep:GetClass()) --make sure the weapon to upgrade is the current one
-		local data = self:GetCurrentWeaponData()
+		local data = self:CurrentWeapon()
 		if self.accountdata["level"][level] > data["level"][level] then --the player's level must be greater than the current level of the weapon.
 			if bignumcompare(self.accountdata["gold"], data["prices"][level]) == 1 or bignumcompare(self.accountdata["gold"], data["prices"][level]) == 0 then
-				bignumsub(self.accountdata["gold"], data["prices"][level])
+				self:SpendGold(data["prices"][level])
 				bignumadd(data["investment"], data["prices"][level])
-				bignummult(data["prices"][level], 1.15 + (0.1*(level-1)))
-				self:SetWepLv(wep, level, data["level"][level] + 1)
-			else
+				bignummult(data["prices"][level], 1.15 + (5.9*(level-1)) + (data["level"][level]/10))
+				self:SetWepLv(wep, level, data["level"][level] + 1, nofx)
+			elseif !self.TurboLv then
 				--tell the player that they can't afford the upgrade and show the comparison of their gold versus the price.
-				Announce("Insufficient gold: " .. bignumwrite(self.accountdata["gold"]) .. " / " .. bignumwrite(data["prices"][level]), Color(255,0,0), Color(0,0,0), 1, self)
+				self:PrintMessage(HUD_PRINTCENTER, "Insufficient gold: " .. bignumwrite(self.accountdata["gold"]) .. " / " .. bignumwrite(data["prices"][level]))
 			end
-		else
-			Announce("The level you are trying to upgrade is already equal to the level of yourself.", Color(255,0,0), Color(0,0,0), 1, self)
+		elseif !self.TurboLv then
+			self:PrintMessage(HUD_PRINTCENTER, "The level you are trying to upgrade is already equal to the level of yourself.")
 		end
-	else
+	elseif not TrueCraftling() or Hibernating() then
 		if level != 1 then --the player wants to buy a special level-up (like upgrades or spec ops)
 			if self.accountdata["points"][level-1] > 0 then
 				if bignumcompare(self.accountdata["gold"], self.accountdata["prices"][level]) == 1 or bignumcompare(self.accountdata["gold"], self.accountdata["prices"][level]) == 0 then
-					bignumsub(self.accountdata["gold"], self.accountdata["prices"][level])
+					self:SpendGold(self.accountdata["prices"][level])
 					bignumadd(self.accountdata["investment"], self.accountdata["prices"][level])
-					bignummult(self.accountdata["prices"][level],1.15 + (0.1*(level-1)))
-					self:SetLv(level, self.accountdata["level"][level] + 1)
+					bignummult(self.accountdata["prices"][level],1.15 + (5.9*(level-1)) + (self.accountdata["level"][level]/10))
+					self:SetLv(level, self.accountdata["level"][level] + 1, nofx)
 					self.accountdata["points"][level-1] = self.accountdata["points"][level-1] - 1
-				else
-					Announce("Insufficient gold: " .. bignumwrite(self.accountdata["gold"]) .. " / " .. bignumwrite(self.accountdata["prices"][level]), Color(255,0,0), Color(0,0,0), 1, self)
+				elseif !self.TurboLv then
+					self:PrintMessage(HUD_PRINTCENTER, "Insufficient gold: " .. bignumwrite(self.accountdata["gold"]) .. " / " .. bignumwrite(self.accountdata["prices"][level]))
 				end
-			else
-				local msg = {"Upgrade","Promotion","Training","Spec Ops"}
-				Announce("No " .. msg[level-1] .. " points available.", Color(255,0,0), Color(0,0,0), 1, self)
+			elseif !self.TurboLv then
+				local msg = {"Upgrade","Promotion","Training","Spec Ops", "Reclassification", "Advancement", "Improvement", "Empowerment", "Ameliorate"}
+				self:PrintMessage(HUD_PRINTCENTER, "No " .. msg[level-1] .. " points available.")
 			end
 		else --the player wants to buy a regular level-up
 			if bignumcompare(self.accountdata["gold"], self.accountdata["prices"][level]) == 1 or bignumcompare(self.accountdata["gold"], self.accountdata["prices"][level]) == 0 then
-				bignumsub(self.accountdata["gold"], self.accountdata["prices"][level])
-				bignummult(self.accountdata["prices"][level],1.15)
-				self:SetLv(level, self.accountdata["level"][level] + 1)
-			else
-				Announce("Insufficient gold: " .. bignumwrite(self.accountdata["gold"]) .. " / " .. bignumwrite(self.accountdata["prices"][level]), Color(255,0,0), Color(0,0,0), 1, self)
+				self:SpendGold(self.accountdata["prices"][level])
+				bignummult(self.accountdata["prices"][level],1.15 + (self.accountdata["level"][level]/10))
+				self:SetLv(level, self.accountdata["level"][level] + 1, nofx)
+			elseif !self.TurboLv then
+				self:PrintMessage(HUD_PRINTCENTER, "Insufficient gold: " .. bignumwrite(self.accountdata["gold"]) .. " / " .. bignumwrite(self.accountdata["prices"][level]))
 			end
 		end
+	elseif TrueCraftling() && not self.TurboLv then
+		self:PrintMessage(HUD_PRINTCENTER, "You can't level up yourself whilst Hibernation is off in True Craftling mode.")
 	end
 end
 
 function ply:SaveCraftworldData()
 	if !self:IsPlayer() then return end
-	local dir = "craftworld3/" .. self:SteamID64() .. "/"
+	local dir = sdir .. "/" .. self:SteamID64() .. "/"
 	ownerlog("SAVING DATA FOR " .. self:SteamID64())
 	ownerlog("CONVERTING DATA TO JSON FORMAT")
 	local heroes = util.TableToJSON(self.herodata)
@@ -1685,60 +2245,9 @@ function ply:SaveCraftworldData()
 	ownerlog("FINISHED!")
 end
 
-function ply:HasKey(key)
-	if !self.ChestKeys then self.ChestKeys = 0 end
-	if key == "spade" then
-		return self.spadekey
-	elseif key == "diamond" then
-		return self.diamondkey
-	elseif key == "heart" then
-		return self.heartkey
-	elseif key == "club" then
-		return self.clubkey
-	else
-		if self.ChestKeys > 0 then
-			return true
-		else
-			return false
-		end
-	end
-end
-
-function ply:GiveKey(key, qty)
-	if !qty then qty = 1 end
-	if !self.ChestKeys then self.ChestKeys = 0 end
-	if key == "spade" then
-		self.spadekey = true
-	elseif key == "diamond" then
-		self.diamondkey = true
-	elseif key == "heart" then
-		self.heartkey = true
-	elseif key == "club" then
-		self.clubkey = true
-	else
-		self.ChestKeys = self.ChestKeys + qty
-	end
-end
-
-function ply:TakeKey(key, qty)
-	if !self.ChestKeys then self.ChestKeys = 0 end
-	if key == "spade" then
-		self.spadekey = false
-	elseif key == "diamond" then
-		self.diamondkey = false
-	elseif key == "heart" then
-		self.heartkey = false
-	elseif key == "club" then
-		self.clubkey = false
-	else
-		self.ChestKeys = math.max(0,self.ChestKeys - qty)
-	end
-end
-
 hook.Add("PlayerSpawn","craftworld3_SPAWNPLAYER",function(ply)
 	timer.Simple(0.05, function() if IsValid(ply) then
-	ply:StripWeapons()
-	ply:StripAmmo()
+		ply:RefreshWeapons()
 	end end)
 	ply.AllowedToCrouch = 0
 	if !(ply.Style) then
@@ -1771,8 +2280,9 @@ function npcRainbow(npc)
 		bignumdiv(npc.MaxHealth64, 4) --25% health
 		npc.Health64 = bignumcopy(npc.MaxHealth64)
 		bignumdiv(npc.Damage64, 6) --16.666666666666666666666666666667% damage
-		bignummult(npc.Gold64, 8) --800% gold
+		bignummult(npc.Gold64, 8*(2.94^curzone)) --800% gold + 194% per zone
 		npc.Prefix = "Rainbow "
+		AttachVisual(npc, "mr_effect24")
 	end
 end
 
@@ -1780,9 +2290,9 @@ function npcBrute(npc)
 	if npc:IsNPC() then
 		npc.ActiveMat = "models/effects/invulnfx_red"
 		bignummult(npc.MaxHealth64, 2.5) --250% hp
-		npc.Health64 = bignumcopy(npc.MaxHealth64)
 		bignummult(npc.Damage64, 1.5) --150% damage
-		bignummult(npc.Gold64, 3.75) --375% gold
+		bignummult(npc.Gold64, 3.75*(1.85^curzone)) --375% gold + 85% per zone
+		npc.Health64 = bignumcopy(npc.MaxHealth64)
 		npc:SetModelScale(1.3, 0) --130% size
 		npc.Prefix = "Brute "
 	end
@@ -1790,14 +2300,46 @@ end
 
 local motors = {"scout", "soldier", "pyro", "demoman", "heavy"}
 
+function npcHard(npc)
+	if npc:IsNPC() then
+		bignummult(npc.MaxHealth64, 2 + (curzone/50))
+		bignummult(npc.Damage64, 2 + (curzone/50))
+		bignummult(npc.MaxHealth64, 2 + (curzone/50))
+		bignummult(npc.Damage64, 2 + (curzone/50))
+		bignummult(npc.Gold64, 13*(3.53^curzone) + ((curzone^2)/50))
+		npc.Health64 = bignumcopy(npc.MaxHealth64)
+		if npc:GetModelScale() > 1 then
+			npc:SetModelScale(npc:GetModelScale() * 1.35, 0) --+35% larger in size
+		end
+		npc.Prefix = "Hard " .. (npc.Prefix or "")
+	end
+end
+
+function npcExpert(npc)
+	if npc:IsNPC() then
+		for i = 1, 2 do
+			bignummult(npc.MaxHealth64, 3.4 + (curzone/30))
+			bignummult(npc.Damage64, 3.4 + (curzone/30))
+			bignummult(npc.MaxHealth64, 3.4 + (curzone/30))
+			bignummult(npc.Damage64, 3.4 + (curzone/30))
+			bignummult(npc.Gold64, 13*(3.53^curzone) + ((curzone^2)/30))
+		end
+		npc.Health64 = bignumcopy(npc.MaxHealth64)
+		if npc:GetModelScale() > 1 then
+			npc:SetModelScale(npc:GetModelScale() * 1.45, 0) --+45% larger in size
+		end
+		npc.Prefix = "Expert " .. (npc.Prefix or "")
+	end
+end
+
 function npcGiant(npc)
 	if npc:IsNPC() then
 		local randommotor = math.random(1,#motors)
 		npc.ActiveMat = "phoenix_storms/metalset_1-2"
-		bignummult(npc.MaxHealth64, 5.5) --max health x 5.5
-		npc.Health64 = bignumcopy(npc.MaxHealth64)
+		bignummult(npc.MaxHealth64, 2.9) --max health x 6.3
 		bignummult(npc.Damage64, 2) --damage x 2
-		bignummult(npc.Gold64, 10) --gold value x 10
+		bignummult(npc.Gold64, 13*(3.53^curzone)) --gold value x 13 + 253% per zone
+		npc.Health64 = bignumcopy(npc.MaxHealth64)
 		npc:SetModelScale(1.75, 0) --+75% larger in size
 		npc.MotorLoop = CreateSound(npc, "mvm/giant_" .. motors[randommotor] .. "/giant_" .. motors[randommotor] .. "_loop.wav")
 		npc.Prefix = "Giant "
@@ -1805,33 +2347,278 @@ function npcGiant(npc)
 end
 
 function npcBoss(npc)
+	for k, v in pairs(npcsGetAll()) do
+		if v != npc then
+			v:Remove()
+		end
+	end
 	if npc:IsNPC() then
+		npc.IsBoss = true
 		ParticleEffect("merasmus_spawn", npc:GetPos(), Angle(0,0,0))
+		ParticleEffect("halloween_boss_summon", npc:GetPos(), Angle(0,0,0))
+		if zonekills >= maxzonekills then --sorry, mate!
+			npc.Gold64 = {0, 0}
+		else
+			npc.Gold64 = bignumadd(npc.Gold64, bignumadd(bignumcopy(rainbowchestvalue), bignumcopy(zonebonus)))
+		end
 		local randommotor = math.random(1,#motors)
 		npc.ActiveMat = "phoenix_storms/FuturisticTrackRamp_1-2"
 		for i = 1, math.ceil(curzone/5) do --for every 5th zone, do:
-			bignummult(npc.MaxHealth64, 2.4) --max health x 2.4
-			bignummult(npc.Damage64, 1.3) --damage x 1.3
-			bignummult(npc.Gold64, 2.15) --gold value x 2.15
+			if TrueCraftling() then
+				bignummult(npc.MaxHealth64, 1.21)
+				bignummult(npc.Damage64, 1.01)
+				if math.random(capsulechance) == 1 then
+					npc.DropsCapsule = true
+				end
+			else
+				bignummult(npc.MaxHealth64, 2.9*math.ceil(curzone/5))
+				bignummult(npc.Damage64, 1.02*math.ceil(curzone/5))
+			end
 		end
 		npc.Health64 = bignumcopy(npc.MaxHealth64)
+		npc.ExtraLives = math.ceil(curzone/10)
 		npc:SetModelScale(1.9, 0) --+90% larger in size
 		npc.MotorLoop = CreateSound(npc, "mvm/giant_" .. motors[randommotor] .. "/giant_" .. motors[randommotor] .. "_loop.wav")
 		npc.Prefix = "Boss "
+		npc.CountdownInit = true
 	end
 end
+
+function npcStrong(npc)
+		bignummult(npc.MaxHealth64, 2)
+		bignummult(npc.Damage64, 2)
+		bignummult(npc.Gold64, 4)
+		npc.Health64 = bignumcopy(npc.MaxHealth64)
+		local chest = ents.Create("prop_dynamic")
+		chest:SetModel("models/pickups/pickup_powerup_strength_arm.mdl")
+		chest:SetParent(npc)
+		chest:SetPos(npc:GetPos() + Vector(0,0,npc:OBBMaxs().z + 5))
+		chest:SetAngles(npc:GetAngles())
+		chest.IsDebris = 1
+		chest:Spawn()
+		npc.Prefix = "Strong "
+end
+
+--Malachite
+--Absurd health scale, highly-reduced damage, gold nullified, all hits reduce victim to 1 pulse
+function npcMalachite(npc)
+		bignummult(npc.MaxHealth64, 8.5)
+		bignumdiv(npc.Damage64, 25)
+		npc.Gold64 = {0,0}
+		npc.Health64 = bignumcopy(npc.MaxHealth64)
+		npc.IsMalachite = true
+		npc.ActiveMat = "models/shiney/grurplevelvet"
+		npc:SetModelScale(npc:GetModelScale() * 1.25)
+		ParticleEffect("merasmus_spawn", npc:GetPos(), Angle(0,0,0))
+		npc:EmitSound("rf/malachite.wav", 511)
+		npc:EmitSound("rf/malachite.wav", 511)
+		if IsValid(npc:GetChildren()[1]) then
+			npc:GetChildren()[1]:SetPos(Vector(0,0,npc:OBBMaxs().z + 5))
+		end
+		local chest = ents.Create("prop_dynamic")
+		chest:SetModel("models/pickups/pickup_powerup_plague.mdl")
+		chest:SetParent(npc)
+		chest:SetPos(npc:GetPos() + Vector(0,0,npc:OBBMaxs().z + 15))
+		chest:SetAngles(npc:GetAngles())
+		chest.IsDebris = 1
+		chest:Spawn()
+		if npc.Prefix then --this can be stacked onto other prefixes!
+			npc.Prefix = npc.Prefix .. "Malachite "
+		else
+			npc.Prefix = "Malachite "
+		end
+end
+
+--Brimstone
+--Ridiculously-strong strength amplifier.
+function npcBrimstone(npc)
+		for i = 1, 3 do
+			bignummult(npc.MaxHealth64, 13.2)
+			bignummult(npc.Gold64, 13.2)
+		end
+		npc.ExtraLives = 0
+		npc.Health64 = bignumcopy(npc.MaxHealth64)
+		npc.IsBrimstone = true
+		npc.ActiveMat = "nature/underworld_lava001"
+		ParticleEffectAttach("burningplayer_flyingbits", 1, npc, 1)
+		npc:SetModelScale(npc:GetModelScale() * 1.4)
+		ParticleEffect("merasmus_spawn", npc:GetPos(), Angle(0,0,0))
+		npc:EmitSound("rf/malachite.wav", 511, 80)
+		npc:EmitSound("rf/malachite.wav", 511, 80)
+		npc:EmitSound("rf/brimstone.wav", 511, 100)
+		npc:EmitSound("rf/brimstone.wav", 511, 100)
+		if npc.Prefix then --this can be stacked onto other prefixes!
+			npc.Prefix = npc.Prefix .. "Brimstone "
+		else
+			npc.Prefix = "Brimstone "
+		end
+end
+
+function npcAmmo(npc)
+		npc.AmmoDrop = true
+		local chest = ents.Create("prop_dynamic")
+		chest:SetModel("models/items/ammopack_small.mdl")
+		chest:SetParent(npc)
+		chest:SetPos(npc:GetPos() + Vector(0,0,npc:OBBMaxs().z + 5))
+		chest:SetAngles(npc:GetAngles())
+		chest.IsDebris = 1
+		chest:Spawn()
+		npc.Prefix = "Ammo "
+end
+
+function npcGCube(npc, qty)
+	if !qty then qty = {math.random(10), 0} end
+	qty[1] = math.Round(qty[1])
+	if bignumzero(qty) then qty = {1, 0} end
+	if npc:IsNPC() then
+		npc.gCubes = qty
+		npc.ActiveMat = "effects/australium_sapphire"
+		npc.Prefix = "[" .. bignumwrite(npc.gCubes) .. "] gCube "
+		ParticleEffect("merasmus_spawn", npc:GetPos(), Angle(0,0,0))
+		npc:EmitSound("rf/npc_evolve.wav", 511, 35)
+		Announce("gCubes!", Color(0,0,255), Color(255,255,255), 1)
+		local chest = ents.Create("prop_dynamic")
+		chest:SetModel("models/hunter/blocks/cube05x05x05.mdl")
+		chest:SetParent(npc)
+		chest:SetPos(npc:GetPos() + Vector(0,0,npc:OBBMaxs().z + 5))
+		chest:SetAngles(npc:GetAngles())
+		chest:SetMaterial(npc.ActiveMat)
+		chest.IsDebris = 1
+		chest:Spawn()
+	end
+end
+
+function npcCCube(npc, qty)
+	if !qty then qty = {math.random(10), 0} end
+	qty[1] = math.Round(qty[1])
+	if bignumzero(qty) then qty = {1, 0} end
+	if npc:IsNPC() then
+		npc.cCubes = qty
+		npc.ActiveMat = "effects/australium_emerald"
+		npc.Prefix = "[" .. bignumwrite(npc.cCubes) .. "] cCube "
+		ParticleEffect("merasmus_spawn", npc:GetPos(), Angle(0,0,0))
+		npc:EmitSound("rf/npc_evolve.wav", 511, 35)
+		Announce("cCubes!", Color(0,199,0), Color(255,255,255), 1)
+		local chest = ents.Create("prop_dynamic")
+		chest:SetModel("models/hunter/blocks/cube05x05x05.mdl")
+		chest:SetParent(npc)
+		chest:SetPos(npc:GetPos() + Vector(0,0,npc:OBBMaxs().z + 5))
+		chest:SetAngles(npc:GetAngles())
+		chest:SetMaterial(npc.ActiveMat)
+		chest.IsDebris = 1
+		chest:Spawn()
+	end
+end
+
+function npcAceCube(npc, qty)
+	if !qty then qty = {math.random(10), 0} end
+	qty[1] = math.Round(qty[1])
+	if bignumzero(qty) then qty = {1, 0} end
+	if npc:IsNPC() then
+		npc.cCubes = qty
+		npc.gCubes = qty
+		npc.ActiveMat = "effects/australium_aquamarine"
+		npc.Prefix = "[" .. bignumwrite(qty) .. "] AceCube "
+		ParticleEffect("merasmus_spawn", npc:GetPos(), Angle(0,0,0))
+		npc:EmitSound("rf/npc_evolve.wav", 511, 35)
+		npc:EmitSound("rf/omega.wav", 511, 115)
+		Announce("AceCubes!", Color(0,255,255), Color(255,255,255), 1)
+		local chest = ents.Create("prop_dynamic")
+		chest:SetModel("models/hunter/blocks/cube05x05x05.mdl")
+		chest:SetParent(npc)
+		chest:SetPos(npc:GetPos() + Vector(0,0,npc:OBBMaxs().z + 5))
+		chest:SetAngles(npc:GetAngles())
+		chest:SetMaterial(npc.ActiveMat)
+		chest.IsDebris = 1
+		chest:Spawn()
+	end
+end
+
+function npcRainbowChest(npc)
+	if npc:IsNPC() then
+		npc.RainbowChest = true
+		npc.Prefix = "Rainbow Chest "
+		ParticleEffect("merasmus_spawn", npc:GetPos(), Angle(0,0,0))
+		ParticleEffect("merasmus_spawn", npc:GetPos(), Angle(0,0,0))
+		npc:EmitSound("rf/npc_evolve.wav", 511, 15)
+		npc:EmitSound("rf/npc_evolve.wav", 511, 15)
+		npc:EmitSound("rf/npc_evolve.wav", 511, 15)
+		Announce("R a i n b o w   C h e s t !", Color(0,255,255), Color(0,255,0), 7)
+		local chest = ents.Create("prop_dynamic")
+		chest:SetModel("models/props/cs_militia/footlocker01_closed.mdl")
+		chest:SetParent(npc)
+		chest:SetPos(npc:GetPos() + Vector(0,0,npc:OBBMaxs().z + 5))
+		chest:SetAngles(npc:GetAngles())
+		chest:SetMaterial("models/shiney/colorsphere3")
+		chest.IsDebris = 1
+		chest:Spawn()
+		AttachVisual(npc, "mr_effect24")
+		AttachVisual(chest, "mr_effect112_b")
+	end
+end
+
+function RewardRainbowChest(spawn)
+	local chest = ents.Create("prop_physics")
+	chest:SetModel("models/props/cs_militia/footlocker01_open.mdl")
+	chest:PhysicsInit(SOLID_VPHYSICS)
+	chest:SetSolid(SOLID_VPHYSICS)
+	chest:SetCollisionGroup(COLLISION_GROUP_DEBRIS)
+	chest:SetPos(spawn)
+	chest:SetMaterial("models/shiney/colorsphere3")
+	chest.IsDebris = 1
+	chest:Spawn()
+	AttachVisual(chest, "mr_effect112_b")
+	Announce("Rainbow Chest acquired", Color(0,255,255), Color(255,0,255), 3)
+	ParticleEffect("merasmus_spawn", chest:GetPos(), Angle(0,0,0))
+	chest:EmitSound("rf/omega.wav", 511, 50)
+	chest:EmitSound("rf/omega.wav", 511, 50)
+	if IsValid(chest:GetPhysicsObject()) then
+		local phys = chest:GetPhysicsObject()
+		phys:AddVelocity(VectorRand()*300)
+		phys:AddAngleVelocity(VectorRand()*1080)
+	end
+	timer.Simple(5, function() if IsValid(chest) then chest:SetModelScale(3, 2) end end)
+	timer.Simple(7, function()
+		Announce("$" .. bignumwrite(bignummult(bignummult(bignumcopy(rainbowchestvalue), 13*(3.53^curzone)), 15)), Color(0,255,0), Color(255,255,0), 7)
+		if IsValid(chest) then
+			for i = 1, 15 do
+				SpawnGold(chest, bignummult(bignumcopy(rainbowchestvalue), 13*(3.53^curzone)), true)
+			end
+			chest:EmitSound("rf/omega.wav", 511, 50)
+			chest:EmitSound("rf/omega.wav", 511, 50)
+			BreakEntity(chest)
+			chest:Fire("break","")
+		else --failsafe if the chest no longer exists for some reason.
+			for k, v in pairs(player.GetAll()) do v:GainGold(bignummult(bignummult(bignumcopy(rainbowchestvalue), 13*(3.53^curzone)), 15)) end
+		end
+	end)
+end
+
+concommand.Add("cheatrainbowchest", function(ply) if ply:IsSuperAdmin() then RewardRainbowChest(ply:GetPos() + ply:OBBCenter()) end end)
+
+concommand.Add("cheatcapsule", function(ply, cmd, args)
+	if ply:IsSuperAdmin() then
+		for i = 1, (tonumber(args[1]) or 1) do
+			local cap = ents.Create("cw3_pickup")
+			cap.ItemID = 8
+			cap.SubID = (tonumber(args[2]) or math.random(10))
+			cap:SetPos(ply:GetPos() + ply:OBBCenter())
+			cap:Spawn()
+		end
+	end
+end)
 
 hook.Add("PlayerSpawnedNPC", "craftworld3_MODIFYNPC", function(ply, npc)
 	if IsValid(npc) then
 		for i = 1, #allowednpcs do
 			if allowednpcs[i] == npc:GetClass() then
-				npc.MaxHealth64 = bignumcopy(enemies[allowednpcs[i]].hp)
+				npc.MaxHealth64 = bignummult(bignumcopy(enemies[allowednpcs[i]].hp), math.min(6, PlayerCount()))
 				npc.Damage64 = bignumcopy(enemies[allowednpcs[i]].dmg)
 				npc.Gold64 = bignumcopy(enemies[allowednpcs[i]].gold)
 				local randmod = math.Rand(0.9 + (0.05*(curzone-1)),1.03 + (0.1*(curzone-1)))
 				bignummult(npc.MaxHealth64, randmod)
 				bignummult(npc.Damage64, randmod)
-				bignummult(npc.Gold64, randmod)
+				bignummult(npc.Gold64, randmod*(7.25^curzone))
 				npc.Health64 = bignumcopy(npc.MaxHealth64)
 				npc.ValidNPC = true
 			end
@@ -1845,18 +2632,66 @@ hook.Add("PlayerSpawnedNPC", "craftworld3_MODIFYNPC", function(ply, npc)
 			npc.FreezeToPosition = npc:GetPos()
 			npc.Hologramed = true
 		end
+		local malachiteavailable = true
 		if curzone % math.Round(cfg["game"]["zone_boss_interval"]) == 0 then
 			npcBoss(npc)
+			malachiteavailable = false --just in case
+		elseif math.random(1,200) == 1 or CurTime() > timeuntilnextchest then
+			npcRainbowChest(npc)
+			if CurTime() > timeuntilnextchest then timeuntilnextchest = CurTime() + 600 end
+			malachiteavailable = false
 		elseif math.random(1,20) == 1 then
 			npcRainbow(npc)
-		elseif math.random(1,10) == 1 && curzone > 25 then
+			malachiteavailable = false
+		elseif math.random(1,18) == 1 then
+			npcAceCube(npc, bignumdiv(GetZoneCubeValue()[1], 8))
+		elseif math.random(1,16) == 1 then
+			npcCCube(npc, bignumdiv(GetZoneCubeValue()[2], 8))
+		elseif math.random(1,16) == 1 then
+			npcGCube(npc, bignumdiv(GetZoneCubeValue()[1], 8))
+		elseif math.random(1,14) == 1 then
+			npcAmmo(npc)
+		elseif math.random(1,10) == 1 && curzone > 5 then
 			npcGiant(npc)
+		elseif math.random(1,10) == 1 then
+			npcStrong(npc)
 		elseif math.random(1,10) == 1 then
 			npcBrute(npc)
 		end
-		if npc:GetClass() == "npc_poisonzombie" then
-			npc:SetKeyValue("crabamount", 0)
+		if curzone > 149 && math.random(1,9) == 1 then
+			npcBrimstone(npc)
 		end
+		if !npc.IsBrimstone && curzone % math.Round(cfg["game"]["zone_boss_interval"]) != 0 && ((math.random(1,18) == 1 && curzone > 25) or (curzone > 55 && (npc:GetClass() == "npc_headcrab_black" or npc:GetClass() == "npc_poisonzombie" or (npc:GetClass() == "npc_antlion_worker" && curzone > 100)))) && malachiteavailable then
+			npcMalachite(npc)
+		end
+		if curzone % math.Round(cfg["game"]["zone_boss_interval"]) != 0 && curzone >= 80 && !npc.IsBrimstone then
+			if curzone >= 170 then
+				npcExpert(npc)
+			else
+				npcHard(npc)
+			end
+		end
+		if npc:GetClass() == "npc_zombie" or npc:GetClass() == "npc_fastzombie" or npc:GetClass() == "npc_poisonzombie" then
+			if npc:GetBodyGroups() then --just in case
+				if npc:GetBodygroupName(1) == "headcrab1" then --hide the base headcrab
+					npc:SetBodygroup(1,0)
+					if npc:GetBodygroupName(2) == "headcrab2" then --is a poison zombie/has multiple headcrab bodygroups?
+						npc:SetBodygroup(2,0)
+						npc:SetBodygroup(3,0)
+						npc:SetBodygroup(4,0)
+						npc:SetBodygroup(5,0)
+						npc:SetKeyValue( "crabcount", 0 ) --stops them from attempting to throw headcrabs
+						npc:SetSaveValue( "m_bCrabs", {} ) --same as above
+					end
+				end
+			end
+			if npc:GetClass() == "npc_fastzombie" && curzone < 101 then --is a fast zombie, and current zone is below 101?
+				npc:CapabilitiesRemove(CAP_MOVE_JUMP) --remove the capabilties that allows them to leap
+				npc:CapabilitiesRemove(CAP_WEAPON_RANGE_ATTACK1)
+				npc:CapabilitiesRemove(CAP_INNATE_RANGE_ATTACK1)
+			end
+		end
+		if !npc.ExtraLives then npc.ExtraLives = 0 end
 	end
 end)
 
@@ -1865,40 +2700,26 @@ hook.Add("PlayerSpawnSWEP", "craftworld3_SPAWNWEAPONPRIVILEGES", function(ply, w
 end)
 
 hook.Add("PlayerGiveSWEP", "craftworld3_GIVEWEAPONPRIVILEGES", function(ply, weapon, swep)
-	if bignumcompare(ply.accountdata["weaponcubes"], {10, 0}) == 0 or bignumcompare(ply.accountdata["weaponcubes"], {10, 0}) == 1 then
-		if ply:GetActiveWeapon():GetClass() != ply.herodata["meleeweapon"]["class"] then
-			local toreplace = "primaryweapon"
-			if ply:GetActiveWeapon():GetClass() == ply.herodata["secondaryweapon"]["class"] then
-				toreplace = "secondaryweapon"
-			end
-			local multiplier = 1
-			if weapons.Get(weapon):GetPrimaryAmmoType() == "buckshot" then multiplier = 2.5 end
-			if weapons.Get(weapon):GetPrimaryAmmoType() == "ar2" then multiplier = 1.3 end
-			if weapons.Get(weapon):GetPrimaryAmmoType() == "357" then multiplier = 1.7 end
-			if weapons.Get(weapon):GetPrimaryAmmoType() == "SniperRound" or weapons.Get(weapon):GetPrimaryAmmoType() == "SniperPenetratedRound" then multiplier = 3.4 end
-			if weapons.Get(weapon):GetPrimaryAmmoType() == "AirboatGun" or weapons.Get(weapon):GetPrimaryAmmoType() == "rpg" then multiplier = 6.4 end
-			ply:DropWeapon(ply:GetActiveWeapon())
-			bignumadd(ply.accountdata["gold"], ply.herodata[toreplace]["investment"])
-			ply.herodata[toreplace]["class"] = weapon
-			ply.herodata[toreplace]["level"] = {1,0,0,0,0,0,0,0,0,0}
-			ply.herodata[toreplace]["dmg"] = {math.random(10,30),0}
-			bignummult(ply.herodata[toreplace]["dmg"], multiplier)
-			ply.herodata[toreplace]["prices"] = {{40, 0}, {3, 1}, {200, 2}, {35, 3}, {200, 5}, {75, 8}, {90, 11}, {410, 20}, {35, 35}, {50, 50}}
-			bignummult(ply.herodata[toreplace]["prices"][1], multiplier)
-			bignummult(ply.herodata[toreplace]["prices"][2], multiplier)
-			bignummult(ply.herodata[toreplace]["prices"][3], multiplier)
-			bignummult(ply.herodata[toreplace]["prices"][4], multiplier)
-			bignummult(ply.herodata[toreplace]["prices"][5], multiplier)
-			ply.herodata[toreplace]["investment"] = {0,0}
-			ply:SpendWeaponCubes({10, 0})
-			ply:Rationalise()
+	if ply:IsSuperAdmin() then 
+		if weapon == "gmod_tool" then
+			return true
 		else
-			Announce("The Crowbar cannot be replaced.", Color(255,0,0), Color(0,0,0), 3, ply)
+			local weaponexists = false
+			for i = 1, #wpns do
+				if weapon == wpns[i] then
+					weaponexists = true
+				end
+			end
+			if weaponexists then
+				SpawnWeapon(ply:GetPos() + ply:OBBCenter(), weapon)
+			else
+				Announce("Weapon does not exist in config.", Color(127,127,127),Color(0,0,0), 3, ply)
+			end
+			return false
 		end
 	else
-		Announce("You need at least 10 Weapon Cubes to replace your weapon.", Color(255,0,0), Color(0,0,0), 3, ply)
+		return false
 	end
-	return false
 end)
 
 hook.Add("PlayerSpawnSENT", "craftworld3_SENTPRIVILEGES", function(ply, class)
@@ -1958,17 +2779,115 @@ hook.Add("PlayerSay", "craftcommands", function(ply,text)
 			Announce("Lose all of your Pulses, and you lose every single grain of progress you have made.", Color(255,255,255), Color(255,0,0), 7, ply)
 			Announce("Every 5th Zone is a Boss Zone, containing a formidable foe.", Color(255,255,255), Color(0,0,0), 7, ply)
 			Announce("Unlike normal zones - Boss Zones can't be grinded!", Color(255,255,255), Color(255,0,0), 7, ply)
-			Announce("Collect Time Cubes and Weapon Cubes from bosses to make special purchases.", Color(255,255,255), Color(0,255,0), 7, ply)
+			Announce("Collect gCubes and cCubes from bosses to make special purchases.", Color(255,255,255), Color(0,255,0), 7, ply)
 			Announce("How far can you get?", Color(255,255,255), Color(0,0,255), 7, ply)
 			return ""
+		elseif str == "/god" then
+			if ply:IsSuperAdmin() then
+				if ply.CheatGodmode == nil then ply.CheatGodmode = false end
+				ply.CheatGodmode = not ply.CheatGodmode
+			end
+			return ""
+		elseif str == "/martial" then
+			Announce("Toggled Martial Arts.", Color(255,255,255), Color(0,0,255), 3, ply)
+			ply.DisableMartial = not ply.DisableMartial
+			return ""
+		elseif str == "/turbo" then
+			Announce("Toggled Turbo-Upgrade.", Color(255,255,255), Color(0,0,255), 3, ply)
+			ply.TurboLv = not ply.TurboLv
+			return ""
+		elseif str == "/zoneboost" then
+			Announce("Toggled Zone Hibernation Speed Boost.", Color(255,255,255), Color(0,0,255), 3, ply)
+			ply.NoZoneBoost = not ply.NoZoneBoost
+			return ""
+		elseif str == "/panic" then
+			if !ply.InitFall && !ply.AlreadyFallen then ply.Health64 = {0, 0} ply.InitFall = true Announce(ply:Nick() .. " panicked!", Color(255,0,0), Color(0,0,255), 3) end
+			return ""
+		elseif str == "/buywep" then
+			if bignumcompare(ply.accountdata["weaponcubes"], {50, 0}) == 0 or bignumcompare(ply.accountdata["weaponcubes"], {50, 0}) == 1 then
+				SpawnWeapon(ply:GetPos() + ply:OBBCenter(), wpns[math.random(#wpns)], ply)
+				ply:SpendWeaponCubes({50,0})
+			end
+			return ""
+		elseif str == "/sellwep" then
+			local wep = ply:GetActiveWeapon()
+			if wep.InventoryIndex && #ply.herodata > 1 then
+				ply:EmitSound("rf/power_use.wav", 100, 90)
+				ply.herodata[wep.InventoryIndex]["active"] = false
+				ply:GiveCubes(2, bignumcalc({5 + ((ply.herodata[wep.InventoryIndex]["evolution"]-1)*6),0}))
+				ply:StripWeapon(wep:GetClass())
+			end
+			return ""
+		elseif str == "/deletewep" then
+			local wep = ply:GetActiveWeapon()
+			if wep.InventoryIndex && #ply.herodata > 1 then
+				ply:EmitSound("rf/power_use.wav", 100, 70)
+				ply:GainGold(ply.herodata[wep.InventoryIndex]["investment"])
+				ply:GiveCubes(2, bignumcalc({10 + ((ply.herodata[wep.InventoryIndex]["evolution"]-1)*12),0}))
+				table.remove(ply.herodata, wep.InventoryIndex)
+				ply:RefreshWeapons() --weapons now need a new inventory index
+			end
+			return ""
+		elseif str == "/capsules" then
+			if bignumcompare(ply.accountdata["timecubes"], {1.5, 1}) == 0 or bignumcompare(ply.accountdata["timecubes"], {1.5, 1}) == 1 then
+				for i = 1, 3 do
+					local cap = ents.Create("cw3_pickup")
+					cap.ItemID = 8
+					cap.SubID = math.random(10)
+					cap:SetPos(ply:GetPos() + ply:OBBCenter())
+					cap:Spawn()
+				end
+				ply:SpendTimeCubes({1.5, 1})
+			else
+				Announce("Need 1,500 gCubes to purchase.", Color(255,0,0), Color(98,0,0), 3, ply)
+			end
+			return ""
+		elseif str == "/heal" then
+			if bignumcompare(ply.accountdata["timecubes"], {1, 1}) == 0 or bignumcompare(ply.accountdata["timecubes"], {1, 1}) == 1 then
+				ply:RecoverPulses(5 - ply.healthstate)
+				ply.Health64 = bignumcopy(ply.MaxHealth64)
+				ply.TimedGodmode = true
+				ply:GodEnable()
+				timer.Simple(5, function() if IsValid(ply) then ply:GodDisable() ply.TimedGodmode = false end end)
+				ply:SpendTimeCubes({1, 1})
+			else
+				Announce("Need 1,000 gCubes to purchase.", Color(255,0,0), Color(98,0,0), 3, ply)
+			end
+			return ""
+		elseif str == "/maxwlevel" then
+			if ply:CurrentWeapon() != nil then
+				if ply:CurrentWeapon()["level"][1] < ply.accountdata["level"][1] then
+					local price = {ply.accountdata["level"][1] - ply:CurrentWeapon()["level"][1], 0}
+					if bignumcompare(ply.accountdata["timecubes"], price) == 0 or bignumcompare(ply.accountdata["timecubes"], price) == 1 then
+						for i = 1, ply.accountdata["level"][1] - ply:CurrentWeapon()["level"][1] do
+							ply:SetWepLv(ply:GetActiveWeapon(), 1, ply:CurrentWeapon()["level"][1] + 1, true)
+						end
+						ply:SpendTimeCubes(price)
+					end
+				end
+			end
+			return ""
+		elseif str == "/rainbowchest" then
+			if bignumcompare(ply.accountdata["timecubes"], {250, 0}) == 0 or bignumcompare(ply.accountdata["timecubes"], {250, 0}) == 1 then
+				Announce(ply:Nick() .. " purchased a Rainbow Chest.", Color(255,255,255), Color(0,0,255), 3)
+				RewardRainbowChest(ply:GetPos() + ply:OBBCenter())
+				ply:SpendTimeCubes({250, 0})
+			else
+				Announce("Need 250 gCubes to purchase.", Color(255,0,0), Color(98,0,0), 3, ply)
+			end
+			return ""
 		elseif string.sub(str, 1, 4) == "/lvw" then
-			if tonumber(string.sub(str,5,5)) then
-				ply:ShopBuy(tonumber(string.sub(str,5,5)), ply:GetActiveWeapon())
+			if tonumber(string.sub(str,5,string.len(str))) then
+				if tonumber(string.sub(str,5,string.len(str))) > 0 && tonumber(string.sub(str,5,string.len(str))) < 11 then
+					ply:ShopBuy(tonumber(string.sub(str,5,string.len(str))), ply:GetActiveWeapon())
+				end
 			end
 			return ""
 		elseif string.sub(str, 1, 3) == "/lv" then
-			if tonumber(string.sub(str,4,4)) then
-				ply:ShopBuy(tonumber(string.sub(str,4,4)))
+			if tonumber(string.sub(str,4,string.len(str))) then
+				if tonumber(string.sub(str,4,string.len(str))) > 0 && tonumber(string.sub(str,4,string.len(str))) < 11 then
+					ply:ShopBuy(tonumber(string.sub(str,4,string.len(str))))
+				end
 			end
 			return ""
 		elseif str == "/bulkcollect" then
@@ -1976,7 +2895,7 @@ hook.Add("PlayerSay", "craftcommands", function(ply,text)
 			local validpicks = {}
 			for k, pickup in pairs(ents.FindInSphere(ply:GetPos(),100)) do
 				if IsValid(pickup) then
-					if pickup.PickedUp && pickup:GetClass() == "ses_pickup" then
+					if pickup.PickedUp && pickup:GetClass() == "cw3_pickup" then
 						if pickup.PickedUp != 1 && !pickup.DisallowUse then
 							table.insert(validpicks, pickup)
 							count = count + 1
@@ -1999,16 +2918,16 @@ hook.Add("PlayerSay", "craftcommands", function(ply,text)
 				ply:PrintMessage(HUD_PRINTTALK, "Bulk collected " .. count .. " pickups.")
 			end
 			return ""
-		elseif ply:SteamID() == "STEAM_0:1:45185922" then
-			local reaction = 1
-			for i = 1, 3 do
-				if string.sub(text, 1, 1) == "-" then
-					text = string.sub(text, 2, string.len(text))
-					reaction = reaction + 1
-				end
-			end
-			CharacterSpeech(text, reaction)
-			return ""
+		-- elseif ply:SteamID() == "STEAM_0:1:45185922" then
+			-- local reaction = 1
+			-- for i = 1, 3 do
+				-- if string.sub(text, 1, 1) == "-" then
+					-- text = string.sub(text, 2, string.len(text))
+					-- reaction = reaction + 1
+				-- end
+			-- end
+			-- CharacterSpeech(text, reaction)
+			-- return ""
 		else
 			return text
 		end
@@ -2016,37 +2935,148 @@ hook.Add("PlayerSay", "craftcommands", function(ply,text)
 end)
 
 hook.Add("EntityTakeDamage", "craftworld3_DAMAGE", function(victim, dmg)
+	if IsInvincible(victim) then return true end --the victim is invulnerable to most forms of damage.
+	if victim.NPCDead then return true end --a dead thing can't, and shouldn't die while dead.
 	local attacker = dmg:GetAttacker()
-	if !attacker:IsPlayer() && !attacker:IsNPC() then return true end --invalidate environmental damage
-	if !victim:IsPlayer() && !victim:IsNPC() then return false end --validate damage to the environment as engine-side damage
-	if !Hibernating() then --no damage allowed during hibernation
-		if attacker:IsPlayer() && !victim:IsPlayer() then --the attacker is a player
-			if attacker:GetCurrentWeaponData() != nil then
-				local data = attacker:GetCurrentWeaponData()
+	if !IsValid(attacker) then return true end --attacker no longer exists
+	if !IsValid(victim) then return true end --victim no longer exists
+	if attacker.ZeroDamage then return true end --attackers with ZeroDamage enabled cannot deal any damage; only glare and think angry thoughts.
+	if !attacker:IsPlayer() && !attacker:IsNPC() then return true end --the environment cannot deal any damage to living things; only bump, cuddle, hug, and annoy.
+	if !victim:IsPlayer() && !victim:IsNPC() then return false end --damage to the environment is normal.
+	if !Hibernating() then --everything deals zero damage during hibernation.
+		if attacker:IsPlayer() && !victim:IsPlayer() then --the attacker is a player, and the victim is an NPC.
+			local damagescale = 1 + dmg:GetDamage()/100 --the engine-side damage of weapons can impact the CRAFTWORLD3 damage!
+			if attacker:CurrentWeapon() != nil then
+				local data = attacker:CurrentWeapon()
 				victim:EmitSound("rf/hit.wav")
-				bignumsub(victim.Health64, data["dmg"])
+				local damagetotal = bignummult(bignumcopy(data["dmg"]), damagescale)
+				for i = 1, data["evolution"] + (data["level"][10]*2) + data["level"][9] + (attacker.accountdata["level"][10]*4) + (attacker.accountdata["level"][9]*2) do --weapons with higher evolutions and super-high tier levels register multiple hits at once.
+					DamageNumber(victim, damagetotal)
+					bignumsub(victim.Health64, damagetotal)
+				end
+				if attacker:GetActiveWeapon():GetClass() == "tfa_cso_gungnir" then
+					timer.Create(attacker:SteamID() .. "gungnirsacrifice", 0.1, 1, function() if IsValid(attacker) then attacker:EmitSound("rf/emp.wav") attacker.healthstate = math.max(1, attacker.healthstate - 1) end end)
+				end
 				if bignumzero(victim.Health64) then
-					if math.random(1,20) == 1 then
-						local ammo = ents.Create("ses_pickup")
-						ammo.ItemID = 3
-						ammo:SetPos(victim:GetPos() + victim:OBBCenter())
-						ammo:Spawn()
+					if victim.ExtraLives > 0 then --note: extra lives should only be applied to bosses
+						victim.Godmode = true
+						victim:SetSchedule(SCHED_NPC_FREEZE)
+						victim:SetCondition(67)
+						victim.ZeroDamage = true
+						victim.ExtraLives = victim.ExtraLives - 1
+						if !victim.DeadLives then victim.DeadLives = 0 end
+						victim.DeadLives = victim.DeadLives + 1
+						ScatterGold(victim, bignumdiv(bignumcopy(victim.Gold64), 20), 12, true)
+						bignummult(victim.Gold64, 1.32)
+						for i = 1, 6 do
+							local gibs = {"models/bots/gibs/demobot_gib_arm1.mdl", "models/bots/gibs/demobot_gib_arm2.mdl", "models/bots/gibs/demobot_gib_leg1.mdl", "models/bots/gibs/demobot_gib_leg2.mdl", "models/bots/gibs/demobot_gib_leg3.mdl", "models/bots/gibs/demobot_gib_pelvis.mdl","models/bots/gibs/heavybot_gib_arm.mdl", "models/bots/gibs/heavybot_gib_arm2.mdl", "models/bots/gibs/heavybot_gib_chest.mdl", "models/bots/gibs/heavybot_gib_leg.mdl", "models/bots/gibs/heavybot_gib_leg2.mdl", "models/bots/gibs/heavybot_gib_pelvis.mdl", "models/bots/gibs/pyrobot_gib_arm1.mdl", "models/bots/gibs/pyrobot_gib_arm2.mdl", "models/bots/gibs/pyrobot_gib_arm3.mdl", "models/bots/gibs/pyrobot_gib_chest.mdl", "models/bots/gibs/pyrobot_gib_chest2.mdl", "models/bots/gibs/pyrobot_gib_leg.mdl", "models/bots/gibs/pyrobot_gib_pelvis.mdl", "models/bots/gibs/scoutbot_gib_arm1.mdl", "models/bots/gibs/scoutbot_gib_arm2.mdl", "models/bots/gibs/scoutbot_gib_chest.mdl", "models/bots/gibs/scoutbot_gib_leg1.mdl", "models/bots/gibs/scoutbot_gib_leg2.mdl", "models/bots/gibs/scoutbot_gib_pelvis.mdl", "models/bots/gibs/soldierbot_gib_arm1.mdl", "models/bots/gibs/soldierbot_gib_arm2.mdl", "models/bots/gibs/soldierbot_gib_chest.mdl", "models/bots/gibs/soldierbot_gib_leg1.mdl", "models/bots/gibs/soldierbot_gib_leg2.mdl", "models/bots/gibs/soldierbot_gib_pelvis.mdl"}
+							local gib = ents.Create("prop_physics")
+							gib:SetModel(gibs[math.random(#gibs)])
+							gib:SetPos(victim:GetPos())
+							gib:SetAngles(victim:GetAngles())
+							gib:PhysicsInit(SOLID_VPHYSICS)
+							gib:SetSolid(SOLID_VPHYSICS)
+							gib:SetCollisionGroup(COLLISION_GROUP_DEBRIS)
+							gib:SetMaterial(victim:GetMaterial())
+							gib:SetColor(victim:GetColor())
+							gib.IsDebris = 1
+							gib:Spawn()
+							timer.Simple(0, function() if IsValid(gib) then if IsValid(gib:GetPhysicsObject()) then gib:GetPhysicsObject():SetVelocity(VectorRand()*700) gib:GetPhysicsObject():AddAngleVelocity(VectorRand()*720) end end end)
+							timer.Simple(7, function() if IsValid(gib) then gib.InstantSoftRemove = true end end)
+						end
+						victim:EmitSound("rf/gore_metal.wav", 95, 110)
+						victim:EmitSound("replay/enterperformancemode.wav", 511, 100)
+						victim:EmitSound("replay/enterperformancemode.wav", 511, 100)
+						victim:EmitSound("replay/enterperformancemode.wav", 511, 100)
+						victim.prevColor = victim:GetColor()
+						victim.prevActiveMat = victim.ActiveMat
+						victim.ActiveMat = "models/debug/debugwhite"
+						for i = 1, 20 do
+								timer.Simple(i/10, function() if IsValid(victim) then
+									if i % 2 == 0 then
+										victim:SetColor(Color(255,0,0))
+									else
+										victim:SetColor(Color(255,255,255))
+									end
+								end end)
+						end
+						timer.Simple(2.1, function() if IsValid(victim) then
+							victim.Health64 = bignumcopy(victim.MaxHealth64)
+							victim:SetColor(victim.prevColor)
+							victim.ActiveMat = victim.prevActiveMat
+							victim.prevActiveMat = nil
+							victim.prevColor = nil
+							victim.ZeroDamage = nil
+							victim.Godmode = nil
+							victim:SetCondition(68)
+							victim:EmitSound("replay/exitperformancemode.wav", 511, 100)
+							victim:EmitSound("replay/exitperformancemode.wav", 511, 100)
+							victim:EmitSound("replay/exitperformancemode.wav", 511, 100)
+						end end)
+					else
+						if math.random(1,150 - math.floor(curzone/5)) == 1 or victim.DropsCapsule then
+							victim:EmitSound("rf/platinum.wav")
+							SpawnWeapon(victim:GetPos() + victim:OBBCenter(), wpns[math.random(#wpns)], attacker)
+						end
+						if math.random(1,20) == 1 then
+							local ammo = ents.Create("cw3_pickup")
+							ammo.ItemID = 3
+							ammo:SetPos(victim:GetPos() + victim:OBBCenter())
+							ammo:Spawn()
+						end
+						if victim.AmmoDrop then
+							local ammo = ents.Create("cw3_pickup")
+							ammo.ItemID = 3
+							ammo:SetPos(victim:GetPos() + victim:OBBCenter())
+							ammo:Spawn()
+						end
+						if math.random(1,20) == 1 then
+							local ammo = ents.Create("cw3_pickup")
+							ammo.ItemID = 4
+							ammo:SetPos(victim:GetPos() + victim:OBBCenter())
+							ammo:Spawn()
+						end
+						if victim.DropsCapsule then
+							if victim.IsBrimstone then
+								for i = 1, 5 do
+									local cap = ents.Create("cw3_pickup")
+									cap.ItemID = 8
+									cap:SetPos(victim:GetPos() + victim:OBBCenter())
+									cap:Spawn()
+								end
+							else
+								local cap = ents.Create("cw3_pickup")
+								cap.ItemID = 8
+								cap:SetPos(victim:GetPos() + victim:OBBCenter())
+								cap:Spawn()
+							end
+							if victim.IsBoss then
+								if capsulechance <= 1 then capsulechance = 99 end
+								capsulechance = capsulechance + 1
+							end
+						end
+						if victim.gCubes then
+							attacker:GiveCubes(1, victim.gCubes, victim:GetPos() + victim:OBBCenter())
+							victim.gCubes = nil
+						end
+						if victim.cCubes then
+							attacker:GiveCubes(2, victim.cCubes, victim:GetPos() + victim:OBBCenter())
+							victim.cCubes = nil
+						end
+						hook.Call("OnNPCKilled", nil, victim, attacker, attacker:GetActiveWeapon())
+						SlayEnemy(victim, 1, false)
 					end
-					if math.random(1,20) == 1 then
-						local ammo = ents.Create("ses_pickup")
-						ammo.ItemID = 4
-						ammo:SetPos(victim:GetPos() + victim:OBBCenter())
-						ammo:Spawn()
-					end
-					SlayEnemy(victim, 1, false)
 				end
 			end
 		elseif attacker:IsNPC() then --the attacker is an NPC
 			if victim:IsNPC() then --EvE damage
 				victim:EmitSound("rf/hit.wav")
+				DamageNumber(victim, attacker.Damage64)
 				bignumsub(victim.Health64, attacker.Damage64)
 				if bignumzero(victim.Health64) then
-					SlayEnemy(victim, 0, true) --allowing money to drop and zone progression from EvE is exploitable
+					--no need for the extra live code, as bosses will always be on their own (unless if you modify how the game works, you sneaky mad scientist.).
+					hook.Call("OnNPCKilled", nil, victim, attacker, attacker)
+					SlayEnemy(victim, 0, true) --allowing money to drop and allowing zone progression from EvE is exploitable!
 				end
 			elseif victim:IsPlayer() then --PvE damage
 				victim:EmitSound("rf/hit.wav")
@@ -2058,14 +3088,39 @@ hook.Add("EntityTakeDamage", "craftworld3_DAMAGE", function(victim, dmg)
 						victim.RegenActive = true
 					end
 				end)
-				if !bignumzero(victim.Shield64) then
-					bignumsub(victim.Shield64, attacker.Damage64)
+				local damagetotal = bignumdiv(bignumcopy(attacker.Damage64), victim.dmgresist)
+				DamageNumber(victim, damagetotal)
+				if attacker.IsMalachite && victim.healthstate > 1 then victim:EmitSound("rf/emp.wav") victim.healthstate = math.max(victim.healthstate - 1, 1) end
+				if attacker.IsBrimstone && victim.healthstate > 1 then
+					victim:EmitSound("player/crit_received1.wav", 100, 75)
+					victim:EmitSound("player/crit_received1.wav", 100, 75)
+					victim:EmitSound("player/crit_received1.wav", 100, 75)
+					victim:EmitSound("player/crit_received2.wav", 100, 75)
+					victim:EmitSound("player/crit_received2.wav", 100, 75)
+					victim:EmitSound("player/crit_received2.wav", 100, 75)
+					victim:EmitSound("player/crit_received3.wav", 100, 75)
+					victim:EmitSound("player/crit_received3.wav", 100, 75)
+					victim:EmitSound("player/crit_received3.wav", 100, 75)
+					vicitm.healthstate = 1
+				end
+				if attacker.IsMalachite or attacker.IsBrimstone then
+					attacker.ZeroDamage = true
+					timer.Simple(0.02, function() if IsValid(attacker) then SlayEnemy(attacker, 0, true) end end)
+				end
+				if !bignumzero(victim.Block64) && victim.MartialStance then
+					bignumsub(victim.Block64, damagetotal)
+					if bignumzero(victim.Block64) then victim:StripWeapon("weapon_fists") end
+				elseif !bignumzero(victim.Shield64) then
+					bignumsub(victim.Shield64, damagetotal)
 					if bignumzero(victim.Shield64) then victim:EmitSound("rf/eva/break.wav") end
 				else
-					bignumsub(victim.Health64, attacker.Damage64)
+					bignumsub(victim.Health64, damagetotal)
 					if bignumzero(victim.Health64) then
 						local resettime = 7
 						victim.healthstate = victim.healthstate - 1
+						victim.Godmode = true
+						victim.CodeBusy = true
+						PurgeEnemies()
 						Announce("Zone " .. curzone .. " failed! - " .. victim:Nick() .. " was knocked out!", Color(255,0,0), Color(97,30,0), 7)
 						victim:EmitSound("music/mvm_lost_wave.wav", 511, 90)
 						victim:EmitSound("rf/ko" .. math.random(3) .. ".mp3")
@@ -2082,21 +3137,29 @@ hook.Add("EntityTakeDamage", "craftworld3_DAMAGE", function(victim, dmg)
 						zonekills = 0
 						spawningallowed = math.huge
 						KillBomb()
-						PurgeEnemies()
+						if curzone > 1 then
+							SetZone(curzone - 1)
+						else
+							spawningallowed = CurTime() + 1
+						end
 						timer.Simple(resettime, function()
-							if curzone > 1 then
-								SetZone(curzone - 1)
-							else
-								spawningallowed = CurTime() + 1
-							end
 							if IsValid(victim) then
 								WarpFX(victim)
 								victim:Freeze(false)
 								if IsValid(victim:GetRagdollEntity()) then victim:GetRagdollEntity():Remove() end
 								victim:SetNoDraw(false)
+								victim.Health64 = bignumcopy(victim.MaxHealth64)
+								victim.Shield64 = bignumcopy(victim.MaxShield64)
+								victim.Godmode = false
+								victim.CodeBusy = false
 								if victim.healthstate <= 0 then
 									NewSave(victim)
 									victim.healthstate = 5
+									local spawns = ents.FindByClass("info_player_start")
+									if #spawns > 0 then
+										ply:SetPos(spawns[math.random(#spawns)]:GetPos())
+										WarpFX(ply)
+									end
 								end
 							end
 						end)
@@ -2106,17 +3169,6 @@ hook.Add("EntityTakeDamage", "craftworld3_DAMAGE", function(victim, dmg)
 		end
 	end
 	return true
-end)
-
-concommand.Add("ses_openchests", function(ply)
-	if ply:IsSuperAdmin() then
-		for k, v in pairs(ents.FindByClass("ses_chest")) do
-			v.AlreadyMimic = true
-			v:Use(ply, ply, 3, 1)
-		end
-	else
-		accesser:PrintMessage( HUD_PRINTTALK, "You need to be a superadministrator to run this command.")
-	end
 end)
 
 local Iterator = CurTime()
@@ -2242,11 +3294,107 @@ end
 function npcsGetAll()
 	local tbl = {}
 	for k, v in pairs(ents.GetAll()) do
-		if v:IsNPC() then
+		if v:IsNPC() && !v.NPCDead then
 			table.insert(tbl, v)
 		end
 	end
 	return tbl
+end
+
+function GetAllNPCHP()
+	local hp = {0, 0}
+	for k, v in pairs(npcsGetAll()) do
+		if v:IsNPC() then
+			if v.Health64 then
+				if bignumvalid(v.Health64) then
+					bignumadd(hp, v.Health64)
+				end
+			end
+		end
+	end
+	allnpchp = hp
+end
+
+function countdownNPC(npc)
+	if npc:IsNPC() then
+		local str = tostring(npc) .. "countdown"
+		npc:SetSchedule(SCHED_NPC_FREEZE)
+		npc:SetCondition(67)
+		npc:SetRenderMode(RENDERMODE_TRANSALPHA)
+		npc:SetColor(Color(255,255,255,127))
+		npc:SetCollisionGroup(COLLISION_GROUP_WORLD)
+		npc.BossCountdown = 6
+		npc.Godmode = true
+		timer.Create(str, 1, 0, function()
+			if IsValid(npc) then
+				if !npc.BossCountdown then npc.BossCountdown = 6 end
+				if npc.BossCountdown > 1 then
+					local tooclose = false
+					local interferers = {} --table that will store the players which are too close.
+					for k, v in pairs(ents.FindInSphere(npc:GetPos(), 100)) do
+						if v:IsPlayer() then
+							tooclose = true
+							table.insert(interferers, v)
+						end
+					end
+					if tooclose then
+						if npc.BossCountdown < 6 then
+							SendPopoff("=Player(s) is/are too close!=", npc, Color(255,0,0), Color(0,0,0))
+						elseif AntiGriefing() then --the interfering players are still too close for comfort, start warning them. (if anti-troll is on)
+							for k, m in pairs(interferers) do
+								if !m.AntiGriefBossCountdown then m.AntiGriefBossCountdown = 11 end
+								if m.AntiGriefBossCountdown <= 0 && !m.Godmode && !m.InitFall && !m.AlreadyFallen then --karma!
+									if !m.AntiGriefBossDamagePercent then m.AntiGriefBossDamagePercent = 0 end
+									m.AntiGriefBossDamagePercent = m.AntiGriefBossDamagePercent + 1
+									local penalty = bignummult(bignumdiv(bignumcopy(m.MaxHealth64), 100), m.AntiGriefBossDamagePercent)
+									m:EmitSound("player/crit_received" .. math.random(3) .. ".wav", 100)
+									bignumsub(m.Health64, penalty)
+									DamageNumber(m, penalty)
+									if bignumzero(m.Health64) then
+										m.InitFall = true
+									end
+								else
+									m.AntiGriefBossCountdown = m.AntiGriefBossCountdown - 1
+									SendPopoff("Griefing Penalty in " .. m.AntiGriefBossCountdown .. " sec", m, Color(168,0,0), Color(255, 255, 0))
+								end
+							end
+						end
+						npc.BossCountdown = 6
+						npc:SetColor(Color(255,0,0,127))
+					else
+						npc:SetColor(Color(255,255,255,127))
+						npc.BossCountdown = npc.BossCountdown - 1
+						SendPopoff(npc.BossCountdown, npc, Color(255,255,255), Color(0,100,0))
+						npc:EmitSound("vo/announcer_begins_" .. npc.BossCountdown .. "sec.mp3", 511, 100)
+					end
+				else
+					local tooclose = false
+					for k, v in pairs(ents.FindInSphere(npc:GetPos(), 100)) do
+						if v:IsPlayer() then
+							tooclose = true
+						end
+					end
+					if tooclose then
+						if npc.BossCountdown < 6 then
+							SendPopoff("=Too close=", npc, Color(255,0,0), Color(0,0,0))
+						end
+						npc.BossCountdown = 6
+					else
+						npc.BossCountdown = nil
+						ParticleEffect("merasmus_spawn", npc:GetPos(), Angle(0,0,0))
+						npc:EmitSound("mvm/mvm_warning.wav", 511, 100)
+						npc.Godmode = nil
+						npc:SetColor(Color(255,255,255,255))
+						npc:SetCollisionGroup(COLLISION_GROUP_NPC)
+						npc:SetCondition(68)
+						timer.Remove(str)
+					end
+				end
+			else
+				timer.Remove(str)
+			end
+		end)
+	end
 end
 
 hook.Add("Tick","craftworld3_CPU",function()
@@ -2254,39 +3402,58 @@ hook.Add("Tick","craftworld3_CPU",function()
 	if #npcsGetAll() <= 0 then
 		RunConsoleCommand("ai_disabled", "1")
 	end
+	if Hibernating() then
+		for k, p in pairs(ents.FindByClass("cw3_pickup")) do
+			if p.PickedUp == 0 && (p.ItemID == 0 or (p.ItemID >= 5 && p.ItemID <= 7 && LoneWolf())) && (!TrueCraftling() or LoneWolf() or p.IgnoreTrueCraftling) then
+				local rnd = math.random(#player.GetAll())
+				timer.Simple(0, function() if IsValid(p) && IsValid(player.GetAll()[rnd]) then p.UseDelay = math.Rand(0, 1.5) p:Use(player.GetAll()[rnd],player.GetAll()[rnd],3,1) elseif IsValid(p) then WarpFX(p) p:Remove() end end)
+			end
+		end
+	end
 	if zonekills >= maxzonekills && !BombExists() then
 		CreateBomb()
 	end
-	for k, npc in pairs(ents.GetAll()) do
-		if npc:IsNPC() then
+	for k, npc in pairs(npcsGetAll()) do
+		if npc:IsNPC() && !npc.NPCDead && !npc.BossCountdown then
 			if npc.Prefix then npc:SetNWString("botprefix", npc.Prefix or "") end
+			if npc.RainbowChest then npc:SetNWBool("npcrainbowchest", true) end
 			if Hibernating() then
 				if !npc.Hologramed then
-					WarpFX(npc)
-					if npc.FreezeToPosition == nil then npc.FreezeToPosition = npc:GetPos() end
-					npc:SetPos(npc.FreezeToPosition)
-					npc:SetCollisionGroup(COLLISION_GROUP_DEBRIS)
-					if npc.MotorLoop then npc.MotorLoop:Stop() end
-					npc:SetMaterial("models/props_combine/stasisfield_beam")
-					npc:SetColor(Color(255,255,255))
-					npc:SetNoDraw(true)
-					npc.IgnoreHologramCheck = true
-					timer.Simple(2, function() if IsValid(npc) then
-						npc.Health64 = bignumcopy(npc.MaxHealth64)
-						npc:SetNoDraw(false)
+					if npc.Prefix == "Boss " then
+						SlayEnemy(npc, 0, true)
+					else
 						WarpFX(npc)
-						npc.IgnoreHologramCheck = false
-					end end)
-					npc.Hologramed = true
+						if npc.FreezeToPosition == nil then npc.FreezeToPosition = npc:GetPos() end
+						npc:SetPos(npc.FreezeToPosition)
+						npc:SetCollisionGroup(COLLISION_GROUP_DEBRIS)
+						if npc.MotorLoop then npc.MotorLoop:Stop() end
+						npc:SetMaterial("models/props_combine/stasisfield_beam")
+						npc:SetColor(Color(255,255,255))
+						npc:SetNoDraw(true)
+						npc.IgnoreHologramCheck = true
+						timer.Simple(2, function() if IsValid(npc) then
+							npc.Health64 = bignumcopy(npc.MaxHealth64)
+							npc:SetNoDraw(false)
+							WarpFX(npc)
+							npc.IgnoreHologramCheck = false
+						end end)
+						npc.Hologramed = true
+					end
 				end
 			elseif npc.Hologramed && !npc.IgnoreHologramCheck then
 				npc:SetCollisionGroup(COLLISION_GROUP_NPC)
 				if npc.MotorLoop then npc.MotorLoop:Play() npc.MotorLoop:ChangePitch(100/(npc:GetModelScale()-0.75)) end
-				npc:SetMaterial(npc.ActiveMat)
+				npc:SetMaterial(npc.ActiveMat or "")
 				WarpFX(npc)
 				npc.Hologramed = false
+				if npc.CountdownInit then
+					npc.Countdowninit = nil
+					countdownNPC(npc)
+				end
+			else
+				npc:SetMaterial(npc.ActiveMat or "")
 			end
-			if !npc.ValidNPC then SlayEnemy(npc, 0, true) end
+			if !npc.ValidNPC then npc:Remove() else npc:SetNWString("powerlevel", bignumwrite(PowerMeasure(npc))) end
 		end
 	end
 	for k, ply in pairs(player.GetAll()) do
@@ -2295,7 +3462,7 @@ hook.Add("Tick","craftworld3_CPU",function()
 		--ply:SetViewOffset(Vector(0, 0, math.max(5,eyehipos.z)))
 		--ply:SetCurrentViewOffset(Vector(0, 0, math.max(5,eyehipos.z)))
 		--ply:SetHull(Vector(-16, -16, 0), Vector(16, 16, math.max(5,eyehipos.z)))
-		if !ply.healthstage then ply.healthstage = 5 end
+		if !ply.healthstate then ply.healthstate = 5 end
 		if !ply.stamina then ply.stamina = 150 end
 		if !ply.stamina_regen then ply.stamina_regen = CurTime() end
 		if !ply.classed then ply.classed = "craftling" end
@@ -2310,7 +3477,12 @@ hook.Add("Tick","craftworld3_CPU",function()
 		if !ply.staminaboost then ply.staminaboost = 0 end
 		if !ply.hemoblast then ply.hemoblast = 0 end
 		if !ply.nextblast then ply.nextblast = 10 end
+		if ply.TurboLv == nil then ply.TurboLv = false end
+		if ply.NoZoneBoost == nil then ply.NoZoneBoost = false end
 		if ply.RegenActive == nil then ply.RegenActive = true end
+		if !ply.Block64 then ply.Block64 = {0, 0} end
+		if !ply.MaxBlock64 then ply.MaxBlock64 = {0, 0} end
+		if ply.DisableMartial == nil then ply.DisableMartial = false end
 		ply:SetNWInt("stealthboost", ply.stealthboost - CurTime())
 		ply:SetNWInt("speedboost", ply.speedboost - CurTime())
 		ply:SetNWInt("defenseboost", ply.defenseboost - CurTime())
@@ -2322,10 +3494,27 @@ hook.Add("Tick","craftworld3_CPU",function()
 		ply:SetNWBool("heartkey", ply.heartkey)
 		ply:SetNWBool("clubkey", ply.clubkey)
 		ply:SetNWString("totalnpchealth", allnpchp)
-		if ply:GetCurrentWeaponData() != nil then
-			local data = ply:GetCurrentWeaponData()
+		ply:SetNWBool("cw3godmode", IsInvincible(ply))
+		if !ply.FistsCooldown then ply.FistsCooldown = 0 end
+		ply.dmgresist = math.floor((6 - ply.healthstate)^1.7)
+		if ply.healthstate == 1 then
+			ply.dmgresist = 12
+		elseif ply.healthstate <= 0 then
+			ply.dmgresist = 0
+		end
+		if ply.TurboLv then
+			TurboUpgrade(ply)
+		end
+		if Hibernating() && ply.healthstate > 2 then
+			ply.staminaboost = CurTime() + 0.2
+		end
+		ply.FistMultiplier = 1 + (0.1 * (ply.accountdata["fistslevel"][1]-1)) + (0.25 * ply.accountdata["fistslevel"][2]) + (0.34 * ply.accountdata["fistslevel"][3]) + (0.5 * ply.accountdata["fistslevel"][4]) + (0.72 * ply.accountdata["fistslevel"][5]) + (0.714 * ply.accountdata["fistslevel"][6]) + (0.923 * ply.accountdata["fistslevel"][7]) + (1.32 * ply.accountdata["fistslevel"][8]) + (1.84 * ply.accountdata["fistslevel"][9]) + (3 * ply.accountdata["fistslevel"][10])
+		ply.FistDamage = bignummult(bignumdiv(bignumcopy(ply.MaxHealth64), 9.5), ply.FistMultiplier)
+		if ply:CurrentWeapon() != nil then
+			local data = ply:CurrentWeapon()
 			local wep = ply:GetActiveWeapon()
 			wep:SetNWString("weapondamage", bignumwrite(data["dmg"]) or 0)
+			wep:SetNWString("weaponpower", bignumwrite(data["power"]) or 0)
 			wep:SetNWInt("weaponlevel", data["level"][1] or 0)
 			wep:SetNWInt("weaponrank", data["level"][2] or 0)
 			wep:SetNWInt("weaponstar", data["level"][3] or 0)
@@ -2337,10 +3526,45 @@ hook.Add("Tick","craftworld3_CPU",function()
 			wep:SetNWInt("weaponechelon", data["level"][9] or 0)
 			wep:SetNWInt("weapontier", data["level"][10] or 0)
 		end
+		if bignumzero(ply.Block64) then ply:StripWeapon("weapon_fists") ply.FistsCooldown = math.max(CurTime() + 1, ply.FistsCooldown) end
 		if ply.accountdata then
 			local resrc = {"gold", "timecubes", "weaponcubes"}
 			for i = 1, #resrc do
 				ply:SetNWString("account_" .. resrc[i], bignumwrite(ply.accountdata[resrc[i]]))
+			end
+			if ply:HasWeapon("tfa_cso_gungnir") then
+				if ply.accountdata["gungnirtutorial"] == nil then
+					ply.accountdata["gungnirtutorial"] = true
+					Announce("The Gungnir's true form is a very powerful artefact.", Color(255,255,255), Color(0,0,93), 7, ply)
+					Announce("It is capable of eradicating a massive horde of enemies with one blow.", Color(255,255,255), Color(0,0,93), 7, ply)
+					Announce("But beware; damaging at least one enemy with the Gungnir sacrifices a Pulse.", Color(255,0,0), Color(0,0,93), 7, ply)
+					Announce("Do not fear accidental death with this weapon...", Color(255,255,255), Color(0,0,93), 7, ply)
+					Announce("...because it will safely deactivate if you are on your last Pulse.", Color(255,255,255), Color(0,0,93), 7, ply)
+					Announce("Be careful, and use this godlike weapon wisely.", Color(255,255,255), Color(0,0,93), 7, ply)
+				end
+				ply:SetAmmo(5 * (ply.healthstate-1), "slam") --for the gungnir
+			end
+			if !ply:HasWeapon("gmod_tool") && ply:IsSuperAdmin() then
+				ply:Give("gmod_tool")
+			end
+			if !ply:HasWeapon("weapon_fists") && ply.FistsCooldown < CurTime() && ply.healthstate > 2 && !ply.DisableMartial then
+				ply:Give("weapon_fists")
+			elseif ply.FistsCooldown < CurTime() && ply.healthstate > 2 && !ply.DisableMartial then
+				local wep = ply:GetWeapon("weapon_fists")
+				wep:SetNWString("weapondamage", bignumwrite(ply.FistDamage) or 0)
+				wep:SetNWString("weaponpower", bignumwrite(ply.FistDamage) or 0)
+				wep:SetNWInt("weaponlevel", ply.accountdata["fistslevel"][1] or 0)
+				wep:SetNWInt("weaponrank", ply.accountdata["fistslevel"][2] or 0)
+				wep:SetNWInt("weaponstar", ply.accountdata["fistslevel"][3] or 0)
+				wep:SetNWInt("weapongrade", ply.accountdata["fistslevel"][4] or 0)
+				wep:SetNWInt("weaponspecops", ply.accountdata["fistslevel"][5] or 0)
+				wep:SetNWInt("weaponclass", ply.accountdata["fistslevel"][6] or 0)
+				wep:SetNWInt("weaponstage", ply.accountdata["fistslevel"][7] or 0)
+				wep:SetNWInt("weaponquality", ply.accountdata["fistslevel"][8] or 0)
+				wep:SetNWInt("weaponechelon", ply.accountdata["fistslevel"][9] or 0)
+				wep:SetNWInt("weapontier", ply.accountdata["fistslevel"][10] or 0)
+			elseif ply:HasWeapon("weapon_fists") then
+				ply:StripWeapon("weapon_fists")
 			end
 		end
 		if !ply.InformedOfCW3 then
@@ -2374,21 +3598,9 @@ hook.Add("Tick","craftworld3_CPU",function()
 			if ply:GetActiveWeapon().Damage64 then
 				ply:GetActiveWeapon():SetNWString(bignumwrite(ply:GetActiveWeapon().Damage64 or {0, 0}))
 			end
+			if ply:GetActiveWeapon():GetMaxClip1() >= 200 then ply:GetActiveWeapon():SetNWInt("actualammo", ply:GetActiveWeapon():Clip1()) end
 		end
-		if !ply.healthstate then ply.healthstate = 5 end
 		ply:SetNWInt("healthstate", ply.healthstate)
-		if ply:IsSuperAdmin() && #player.GetAll() > 1 then
-			if ply.Healpads then
-				if ply.Healpads > 0 then
-					local grenade = ents.Create("ses_pickup")
-					grenade:SetPos(ply:GetPos() + ply:OBBCenter())
-					grenade.Health64 = ply.Healpads
-					grenade.ItemID = 37
-					grenade:Spawn()
-					ply.Healpads = 0
-				end
-			end
-		end
 		if ply.PrestigeDown != 0 then
 			ply:GodEnable()
 			ply.PrestigeDownGodmode = true
@@ -2396,8 +3608,8 @@ hook.Add("Tick","craftworld3_CPU",function()
 			ply.PrestigeDownGodmode = nil
 			ply:GodDisable()
 		end
-		local walkspeed = 160
-		local runspeed = 320
+		local walkspeed = 160 - (10 * (5-ply.healthstate))
+		local runspeed = 320 - (20 * (5-ply.healthstate))
 		if ply.stamina <= 0 then
 			walkspeed = walkspeed / 1.5
 			runspeed = walkspeed
@@ -2405,7 +3617,24 @@ hook.Add("Tick","craftworld3_CPU",function()
 		else
 			RemoveStatus(ply, "Exhaustion Fatigue")
 		end
-		if ply:IsSprinting() && !ply:IsProne() && ply:GetVelocity() != Vector(0,0,0) then
+		if IsValid(ply:GetActiveWeapon()) && ply.healthstate > 2 then
+			if ply:GetActiveWeapon():GetClass() == "weapon_fists" && !Hibernating() then
+				walkspeed = walkspeed / 1.5
+				runspeed = runspeed / 1.5
+				ApplyStatus(ply, "Martial Stance", 1, math.huge, "none", "models/weapons/c_models/c_boxing_gloves/c_boxing_gloves.mdl", true)
+				ply.dmgresist = ply.dmgresist + 1
+			elseif GetStatusQuantity(ply, "Martial Stance") >= 1 then
+				RemoveStatus(ply, "Martial Stance")
+				if !Hibernating() then ply.FistsCooldown = CurTime() + 7 end
+			end
+		end
+		if ply.FistsCooldown >= CurTime() && ply.healthstate > 2 then
+			ApplyStatus(ply, "Martial Stance Cooldown", 1, math.huge, "none", "models/weapons/c_models/c_boxing_gloves/c_boxing_gloves_xmas.mdl", true)
+		else
+			RemoveStatus(ply, "Martial Stance Cooldown")
+		end
+		if Hibernating() then ply.FistsCooldown = 0 end
+		if ply:IsSprinting() && !ply:IsProne() && ply:GetVelocity() != Vector(0,0,0) && ply:OnGround() then
 			ply.stamina = ply.stamina - 0.1
 			ply.stamina_regen = CurTime() + 5
 		end
@@ -2422,15 +3651,52 @@ hook.Add("Tick","craftworld3_CPU",function()
 		if ply.speedboost > CurTime() then
 			walkspeed = walkspeed * 2
 			runspeed = runspeed * 2
-			ApplyStatus(ply, "Double Speed", 1, math.huge, "none", "models/props_c17/streetsign003b.mdl", true)
+			ApplyStatus(ply, "Double Speed", 1, math.huge, "none", "models/pickups/pickup_powerup_agility.mdl", true)
 		else
 			RemoveStatus(ply, "Double Speed")
 		end
-		if ply.Healpads then
-			if ply.Healpads != 0 then
-				ApplyStatus(ply, "TecPads", ply.Healpads - GetStatusQuantity(ply, "TecPads"), math.huge, "none", "models/props_2fort/groundlight001.mdl")
+		if ply.healthstate > 2 && ply.healthstate <= 4 then
+			ApplyStatus(ply, "Crippled", 5 - ply.healthstate, math.huge, "none", "models/Gibs/HGIBS_spine.mdl", true)
+		else
+			RemoveStatus(ply, "Crippled")
+		end
+		if ply.healthstate <= 2 then
+			ApplyStatus(ply, "Incapacitated", 1, math.huge, "none", "models/Gibs/HGIBS_scapula.mdl", true)
+		else
+			RemoveStatus(ply, "Incapacitated")
+		end
+		if IsInvincible(ply) then
+			ApplyStatus(ply, "Godmode", 1, math.huge, "none", "models/pickups/pickup_powerup_uber.mdl", true)
+		else
+			RemoveStatus(ply, "Godmode")
+		end
+		if Hibernating() && !ply.NoZoneBoost && ply:GetMoveType() != MOVETYPE_NOCLIP && ply.healthstate > 2 then
+			walkspeed = 1000
+			runspeed = 1500
+			ApplyStatus(ply, "Zone Hibernation Speed Boost", 1, math.huge, "none", "models/pickups/pickup_powerup_agility.mdl", true)
+		else
+			RemoveStatus(ply, "Zone Hibernation Speed Boost")
+		end
+		if ply.IgnoreFallDamageOnce && !ply.IgnoreFallDamageAlways && !ply.Godmode then
+			ApplyStatus(ply, "Next Fall Damage Negation", 1, math.huge, "none", "models/weapons/w_models/w_shovel.mdl", true)
+		else
+			RemoveStatus(ply, "Next Fall Damage Negation")
+		end
+		if (ply.IgnoreFallDamageAlways or Hibernating()) && !ply.Godmode then
+			ApplyStatus(ply, "Fall Damage Negation", 1, math.huge, "none", "models/items/hevsuit.mdl", true)
+		else
+			RemoveStatus(ply, "Fall Damage Negation")
+		end
+		if ply:GetMoveType() == MOVETYPE_NOCLIP then
+			ApplyStatus(ply, "Noclip", 1, math.huge, "none", "models/props_halloween/ghost_no_hat_red.mdl", true)
+		else
+			RemoveStatus(ply, "Noclip")
+		end
+		if ply.dmgresist then
+			if ply.dmgresist > 1 then
+				ApplyStatus(ply, "Damage Resistance", ply.dmgresist - 1 - GetStatusQuantity(ply, "Damage Resistance"), math.huge, "none", "models/pickups/pickup_powerup_resistance.mdl")
 			else
-				RemoveStatus(ply, "TecPads")
+				RemoveStatus(ply, "Damage Resistance")
 			end
 		end
 		if ply:Health() > 0 then
@@ -2468,52 +3734,70 @@ hook.Add("Tick","craftworld3_CPU",function()
 		if ply.InitFall && !ply.AlreadyFallen then
 			ply.InitFall = nil
 			ply.AlreadyFallen = true
-			ply:EmitSound("rf/player_fall.wav")
-			ply.DontRegen = true
-			ply.Shield64 = {0, 0}
-			ply:CreateRagdoll()
-			ply:SetNoDraw(true)
-			ply:GodEnable()
-			ply:Freeze(true)
-			local reappeartime = 5
-			if ply:WaterLevel() < 2 then reappeartime = 1 end
-			timer.Simple(reappeartime, function() if IsValid(ply) then
-			ply:GodDisable()
-			ply:SetNoDraw(false)
-			ply:Freeze(false)
-			ply:SetPos(ents.FindByClass("info_player*")[math.random(#ents.FindByClass("info_player_start"))]:GetPos() + Vector(0,0,1))
-			ply:SetVelocity(Vector(0,0,-1600))
-			ply.DontRegen = nil
-			if game.GetMap() == "gm_carcon_ws" then
-				ply:SetPos(ply:GetPos() + Vector(0,1300,850))
-				ply:Freeze(true)
-				ply:GodEnable()
-				local thehand = ents.Create("prop_dynamic")
-				thehand:SetModel("models/terr/models/bosses/boss_skeletron_v2_script_hand_l.mdl")
-				thehand:SetPos(ply:GetPos() + Vector(30,-180,0))
-				thehand:SetAngles(Angle(-180,0,0))
-				thehand.Indestructible = 1
-				for a = 1, 181 do
-					timer.Simple(1 + (a/250), function() if IsValid(thehand) then
-						if a == 181 then
-							if IsValid(ply) then
-								ply:Freeze(false)
-								ply:GodDisable()
-								ply:SetVelocity(Vector(0,0,-1600))
-							end
-						else
-							thehand:SetAngles(thehand:GetAngles() + Angle(1,0,0))
-							thehand:SetPos(thehand:GetPos() + Vector(0,0,0.15))
-						end
-					end end)
+			if bignumcompare(ply.Health64, bignumdiv(bignumcopy(ply.MaxHealth64), 10)) == 1 then
+				timer.Simple(0.2, function() if IsValid(ply) then ply.AlreadyFallen = nil ply.InitFall = nil end end)
+				ply:EmitSound("misc/halloween/spell_blast_jump.wav")
+				ParticleEffectAttach( "spell_cast_wheel_blue", 1, ply, 2 )
+				if !Hibernating() then bignumsub(ply.Health64, bignumdiv(bignumcopy(ply.MaxHealth64), 10)) end
+				ply:SetVelocity(Vector(0,0,900 + (-ply:GetVelocity().z)))
+			else
+				ply:EmitSound("rf/player_fall.wav")
+				ply.DontRegen = true
+				if ply.healthstate <= 1 then
+					ply.Health64 = {1, 0}
+				else
+					ply.Health64 = bignumcopy(ply.MaxHealth64)
 				end
-				timer.Simple(5, function() if IsValid(thehand) then thehand:SetModelScale(0.001, 1.5) end end)
-				timer.Simple(6.5, function() if IsValid(thehand) then thehand:Remove() end end)
+				ply.Shield64 = bignumcopy(ply.MaxShield64)
+				ply.Block64 = bignumcopy(ply.MaxBlock64)
+				ply.healthstate = math.max(1, ply.healthstate - 1)
+				ply:CreateRagdoll()
+				ply:SetNoDraw(true)
+				ply.Godmode = true
+				ply:Freeze(true)
+				local reappeartime = 5
+				--if ply:WaterLevel() < 2 then reappeartime = 1 end
+				timer.Simple(reappeartime, function() if IsValid(ply) then
+				ply.Godmode = false
+				ply:SetNoDraw(false)
+				ply:Freeze(false)
+				ply:SetPos(ents.FindByClass("info_player*")[math.random(#ents.FindByClass("info_player_start"))]:GetPos() + Vector(0,0,1))
+				ply.IgnoreFallDamageOnce = true
+				timer.Simple(10, function() if IsValid(ply) then ply.IgnoreFallDamageOnce = nil end end)
+				ply:SetVelocity(Vector(0,0,-1600))
+				ply.DontRegen = nil
+				if game.GetMap() == "gm_carcon_ws" then
+					ply:SetPos(ply:GetPos() + Vector(0,1300,850))
+					ply:Freeze(true)
+					ply:GodEnable()
+					local thehand = ents.Create("prop_dynamic")
+					thehand:SetModel("models/terr/models/bosses/boss_skeletron_v2_script_hand_l.mdl")
+					thehand:SetPos(ply:GetPos() + Vector(30,-180,0))
+					thehand:SetAngles(Angle(-180,0,0))
+					thehand.Indestructible = 1
+					for a = 1, 181 do
+						timer.Simple(1 + (a/250), function() if IsValid(thehand) then
+							if a == 181 then
+								if IsValid(ply) then
+									ply:Freeze(false)
+									ply:GodDisable()
+									ply:SetVelocity(Vector(0,0,-1600))
+								end
+							else
+								thehand:SetAngles(thehand:GetAngles() + Angle(1,0,0))
+								thehand:SetPos(thehand:GetPos() + Vector(0,0,0.15))
+							end
+						end end)
+					end
+					timer.Simple(5, function() if IsValid(thehand) then thehand:SetModelScale(0.001, 1.5) end end)
+					timer.Simple(6.5, function() if IsValid(thehand) then thehand:Remove() end end)
+				end
+				timer.Simple(1, function() if IsValid(ply) then ply.AlreadyFallen = nil ply.InitFall = nil end end)
+				if IsValid(ply:GetRagdollEntity()) then ply:GetRagdollEntity():Remove() end
+				end end)
 			end
-			timer.Simple(1, function() if IsValid(ply) then ply.AlreadyFallen = nil ply.InitFall = nil end end)
-			if IsValid(ply:GetRagdollEntity()) then ply:GetRagdollEntity():Remove() end
-			end end)
 		end
+		ply:SetNWString("powerlevel", bignumwrite(PowerMeasure(ply)))
 	end
 	local npcquantity = 0
 	for k, thing in pairs(ents.GetAll()) do
@@ -2584,9 +3868,6 @@ hook.Add("Tick","craftworld3_CPU",function()
 					thing.PropChecked = true
 				end
 			end
-			if thing:GetColor().a <= 0 && !thing.SoftRemove then
-				BreakEntity(thing)
-			end
 			if thing.PropChecked && thing:WaterLevel() >= 1 && !thing.SubmergeBroken && !thing.IgnoreSoftRemove then
 				thing:SetCollisionGroup(COLLISION_GROUP_IN_VEHICLE)
 				BreakEntity(thing, true)
@@ -2594,30 +3875,6 @@ hook.Add("Tick","craftworld3_CPU",function()
 				thing.SubmergeBroken = true
 				thing.IgnoreSoftRemove = true
 			end
-		end
-		if thing:GetClass() == "item_healthkit" then
-			local lewt = ents.Create("ses_pickup")
-			lewt.ItemID = 4
-			lewt.NeverRemove = true
-			lewt:SetPos(thing:GetPos())
-			lewt:Spawn()
-			thing:Remove()
-		end
-		if thing:GetClass() == "item_healthcharger" then
-			local lewt = ents.Create("ses_pickup")
-			lewt.ItemID = 4
-			lewt.NeverRemove = true
-			lewt:SetPos(thing:GetPos())
-			lewt:Spawn()
-			thing:Remove()
-		end
-		if thing:GetClass() == "item_suitcharger" then
-			local lewt = ents.Create("ses_pickup")
-			lewt.ItemID = 4
-			lewt.NeverRemove = true
-			lewt:SetPos(thing:GetPos())
-			lewt:Spawn()
-			thing:Remove()
 		end
 		if thing:IsNPC() then
 			if !thing.BaseMax then thing.BaseMax = thing.MaxHealth64 end
@@ -2686,29 +3943,17 @@ hook.Add("Tick","craftworld3_CPU",function()
 				end
 			end
 			if thing:WaterLevel() > 1 then --slay an NPC that enters water. no NPC should be in water, ever. ignore prestiges and directly kill the NPC.
-				local youmustdie = DamageInfo()
-				youmustdie:SetAttacker(thing)
-				youmustdie:SetInflictor(thing)
-				youmustdie:SetDamageType(DMG_SONIC)
-				youmustdie:SetDamage(math.huge)
-				thing.Health64 = 1
-				thing:TakeDamageInfo(youmustdie)
+				SlayEnemy(thing, 0, true)
 			end
 			for k, hurt in pairs(ents.FindInSphere(thing:GetPos(),3)) do
 				if hurt:GetClass() == "trigger_hurt" then
-					local youmustdie = DamageInfo()
-					youmustdie:SetAttacker(thing)
-					youmustdie:SetInflictor(thing)
-					youmustdie:SetDamageType(DMG_SHOCK)
-					youmustdie:SetDamage(math.huge)
-					thing.Health64 = 1
-					thing:TakeDamageInfo(youmustdie)
+					SlayEnemy(thing, 0, true)
 				end
 			end
 		end
-		thing:SetNWInt("npclives", thing.NPCLives)
-		thing:SetNWInt("npcsuperlives", thing.NPCSuperlives)
-		thing:SetNWInt("npcdeaths", thing.NPCDeaths)
+		thing:SetNWInt("npclives", (thing.ExtraLives or 0))
+		--thing:SetNWInt("npcsuperlives", thing.NPCSuperlives)
+		thing:SetNWInt("npcdeaths", (thing.DeadLives or 0))
 		if thing:IsNPC() or thing:GetClass() == "prop_ragdoll" then
 		if thing.NPCLives == nil then thing.NPCLives = 0 end
 		if thing.NPCSuperlives == nil then thing.NPCSuperlives = 0 end
@@ -2814,14 +4059,10 @@ hook.Add("Tick","craftworld3_CPU",function()
 		if ply.Tokens == nil then ply.Tokens = 0 end
 		if ply.PrestigeDown == nil then ply.PrestigeDown = 0 end
 		if ply.Deadstige == nil then ply.Deadstige = 0 end
-		if ply:HasGodMode() or ply.stealthboost > CurTime() then
-			ApplyStatus(ply, "Invisibility", 1, math.huge, "none", "models/props_c17/streetsign004e.mdl", true)
+		if IsInvincible(ply) then --pay no attention to players under the influence of godmode
 			ply:SetNoTarget(true)
-			ply:SetMaterial("models/props_combine/com_shield001a")
 		else
-			RemoveStatus(ply, "Invisibility")
 			ply:SetNoTarget(false)
-			ply:SetMaterial("")
 		end
 		if ply.Shield == nil then
 			ply.Shield = "none"
@@ -2881,53 +4122,25 @@ hook.Add("Tick","craftworld3_CPU",function()
 		ply:SetNWString("64sp", bignumwrite(ply.Shield64))
 		ply:SetNWString("64mhp", bignumwrite(ply.MaxHealth64))
 		ply:SetNWString("64msp", bignumwrite(ply.MaxShield64))
-		ply:SetNWString("64ap", bignumwrite(ply.Armour64))
+		ply:SetNWString("64bp", bignumwrite(ply.Block64))
+		ply:SetNWString("64mbp", bignumwrite(ply.MaxBlock64))
 		--ply:SetNWInt("prestige", ply.Prestige)
 		ply:SetNWInt("prestige", ply.healthstate or 0)
 		ply:SetNWInt("prestigedown", ply.PrestigeDown)
 		--ply:SetNWInt("deadstige", ply.Deadstige)
 		ply:SetNWInt("deadstige", 5 - (ply.healthstate or 0))
 		ply:SetNWFloat("playerregentime", ply.RegenerationTime)
-		if ply.FightForYourLife == 1 then
-			ply.Bleed = 0
-		end
 		if ply:IsFrozen() then
 			ply:SetVelocity(ply:GetVelocity() / -1)
-		end
-		if !ply:Alive() then
-			ply.FFYLEnd = 0
-			ply.FFYLStart = 0
-			ply.FightForYourLife = 0
-			ply.Bleed = 0
-			ply.Afterburn = 0
-			ply.Aftershock = 0
-			ply.Aftercorrode = 0
-		elseif ply.FFYLStart == 1 then
-			ply.FFYLStart = 0
-			ply.FFYLTime = 600
-			ply:GodEnable()
-			ply.FightForYourLife = 1
-			ply:EmitSound("rf/fightforyourlife_v2.wav", 511, 100)
-			Announce("FIGHT FOR YOUR LIFE!\nVanquish a foe to revive yourself!", Color(255,0,0), Color(80,0,0), 3, ply)
-			Announce(ply:Nick() .. " is dying", Color(255,0,0), Color(80,0,0), 3)
-		elseif ply.FFYLEnd == 1 && ply.FightForYourLife == 1 then
-			ply.FFYLEnd = 0
-			ply.FightForYourLife = 0
-			ply:GodDisable()
-			ply:CalculateStats()
-			ply.Health64 = bignumdiv(bignumcopy(ply.MaxHealth64), 5)
-			ply.Shield64 = bignumcopy(ply.MaxShield64)
-			ply:EmitSound("rf/evolve.mp3", 511, 150)
-			Announce("Second Wind!", Color(0,255,255), Color(0,80,80), 3, ply)
-			Announce(ply:Nick() .. " has been revived", Color(0,255,255), Color(0,80,80), 3)
-		elseif ply.FFYLEnd == 1 && ply.FightForYourLife == 0 then
-			ply.FFYLEnd = 0
 		end
 		if bignumcompare(ply.Health64, ply.MaxHealth64) == 1 then
 			ply.Health64 = bignumcopy(ply.MaxHealth64)
 		end
 		if bignumcompare(ply.Shield64, ply.MaxShield64) == 1 then
 			ply.Shield64 = bignumcopy(ply.MaxShield64)
+		end
+		if bignumcompare(ply.Block64, ply.MaxBlock64) == 1 then
+			ply.Block64 = bignumcopy(ply.MaxBlock64)
 		end
 		ply:SetNWInt("cw3level", ply.accountdata["level"][1])
 		ply:SetNWInt("cw3rank", ply.accountdata["level"][2])
@@ -2939,17 +4152,7 @@ hook.Add("Tick","craftworld3_CPU",function()
 		ply:SetNWInt("cw3quality", ply.accountdata["level"][8])
 		ply:SetNWInt("cw3echelon", ply.accountdata["level"][9])
 		ply:SetNWInt("cw3tier", ply.accountdata["level"][10])
-		ply:SetNWInt("cw3effectivelevel", ply:GetEffectiveLevel())
 		if !ply.ChestKeys then ply.ChestKeys = 0 end
-		if !bignumzero(ply.Armour64) then
-			if !HasStatus(ply,"Armour Damage Resistance Bonus") then
-				ApplyStatus(ply, "Armour Damage Resistance Bonus", 1, math.huge, "none", "models/worms/armourshield.mdl")
-			end
-		else
-			if HasStatus(ply,"Armour Damage Resistance Bonus") then
-				RemoveStatus(ply, "Armour Damage Resistance Bonus")
-			end
-		end
 		if ply.RegenerationTime > 0 then
 			if !HasStatus(ply,"Regen") then
 				ApplyStatus(ply, "Regen", 1, math.huge, "none", "models/worms/healthcrate.mdl")
@@ -2957,22 +4160,6 @@ hook.Add("Tick","craftworld3_CPU",function()
 		else
 			if HasStatus(ply,"Regen") then
 				RemoveStatus(ply, "Regen")
-			end
-		end
-		if ply.ChestKeys > 0 then
-			ApplyStatus(ply, "Keys", ply.ChestKeys - GetStatusQuantity(ply, "Keys"), math.huge, "none", "models/brewstersmodels/luigis_mansion/key.mdl")
-		else
-			if HasStatus(ply,"Keys") then
-				RemoveStatus(ply, "Keys")
-			end
-		end
-		if ply.hemoblastcount then
-			if ply.hemoblastcount > 0 then
-				ApplyStatus(ply, "Hemo Blasts", ply.hemoblastcount - GetStatusQuantity(ply, "Hemo Blasts"), math.huge, "none", "models/items/medkit_small.mdl")
-			else
-				if HasStatus(ply,"Hemo Blasts") then
-					RemoveStatus(ply, "Hemo Blasts")
-				end
 			end
 		end
 		ply.ses = ply.ses or {} --redefine if not defined
@@ -3151,6 +4338,7 @@ hook.Add("Tick","craftworld3_CPU",function()
 			else
 				ply.Shield64 = {0, 0}
 				ply.Health64 = {0, 0}
+				ply.Block64 = {0, 0}
 				ply.RegenerationTime = 0
 			end
 		end

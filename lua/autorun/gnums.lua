@@ -1,31 +1,51 @@
---This Lua file contains code used for CRAFTWORLD3 to compute BigNumbers.
+--Simple BigNumber library by cube#5947 on Discord
+--There is no intent for optimisation or clean code, I made this just because I can, LOL.
+--I am sure there is a better alternative, but if you want one that's straightforward, this is for you.
+
 --bignumnew
 --Creates a new BigNumber.
+--Alternatively, you can make a new BigNumber via a raw table input, like {1, 2} (1 million in BigNumber form).
 function bignumnew(number, power)
 	if !isnumber(power) then power = 0 end
 	local num1 = bignumconvert(number)
-	return {num1[1], num1[2] + power}
+	return bignumcalc({num1[1], num1[2] + power})
+end
+
+--bignumhuge
+--Returns a BigNumber version of Infinity (called BigInfinity) if called with no arguments.
+--Returns a boolean if called with a BigNumber argument. Returns true if it is BigInfinity, or false if it's not.
+function bignumhuge(check)
+	if !check then
+		return {math.huge, math.huge}
+	else
+		if check[1] == math.huge or check[2] == math.huge then
+			return true
+		else
+			return false
+		end
+	end
 end
 
 --bignumcopy
---Returns a duplicate BigNumber.
---This is required to make UNIQUE BigNumbers for seperate variables - for example, using "<var1> = <var2>" doesn't work, because it means they use the same table in memory!
---This function will create a NEW table in memory.
+--Returns a duplicate of the supplied BigNumber.
+--This is required to make UNIQUE BigNumbers for seperate variables - for example, using "<var1> = <var2>" doesn't work, because it means they use the same table (BigNumber) in memory!
+--This function will create a NEW table in memory, so <var1> = bignumcopy(<var2>) means that both tables - although have the same values - are different in memory!
 function bignumcopy(bnum)
 	return {bnum[1], bnum[2]}
 end
 
 --bignumelevate
---Returns the difference between the powers-of-10 of BigNumber 1 and BigNumber 2.
+--Returns the difference between the exponents of BigNumber 1 and BigNumber 2.
 --Called internally by some bignum functions.
 function bignumelevate(bnum1, bnum2)
 	return bnum1[2] - bnum2[2]
 end
 
 --bignumconvert
---Creates a BigNumber by using a raw number. Limited to 1e308.
+--Creates a BigNumber by using a raw number. Limited to 1e308, but can convert Infinity as well.
 function bignumconvert(number)
 	if !isnumber(number) then error("can only convert raw numbers into BigNumber tables") end
+	if number >= math.huge then return {math.huge, math.huge} end
 	number = math.min(number,1e308)
 	local power = 0
 	local length = math.max(string.len(string.Replace(string.Comma(math.floor(number)), ",", "")) - 3, 0)
@@ -39,10 +59,11 @@ function bignumconvert(number)
 end
 
 --bignumwrite
---Takes a BigNumber and writes it as a readable string. For example {326.4, 2} (which equals 326.4 x 100) will be written as 32.64K.
+--Takes a BigNumber and writes it as a readable string in Simplified notation. For example {326.4, 2} (which equals 326.4 x 10^6) will be written as 3.26M.
 --Very big numbers like 1 quintillion will be written as "1a". Players can question what -illion is bigger than another, so the alphabet makes for a good substitute!
 --If the number exceeds 1000z#, it will loop back to the letter "a" and kick # up by 1, producing "a#+1", for example "a2".
 function bignumwrite(bnum)
+	if bignumhuge(bnum) then return "∞" end
 	local power = bnum[2]
 	local term_basic =  {"K","M","B","T","Q"}
 	local term = {"a","b","c","d","e","f","g","h","i","j","k","l","m","n","o","p","q","r","s","t","u","v","w","x","y","z"}
@@ -55,8 +76,9 @@ function bignumwrite(bnum)
 		local b = 0
 		if a > #term then
 			b = math.floor(a / 26)
+			a = a + 1
 		end
-		a = math.max(1,a - (26*b))
+		a = a - (26*b)
 		local c = tostring(math.Round(bnum[1],2)) .. term[a]
 		if b > 0 then
 			c = c .. tostring(b)
@@ -65,10 +87,37 @@ function bignumwrite(bnum)
 	end
 end
 
+--bignumwrite_scientific
+--Writes a BigNumber as a readable string in Scientific notation. (for example 13.6E3)
+function bignumwrite_scientific(bnum)
+	if bignumhuge(bnum) then return "∞" end
+	if bnum[2] <= 0 then return tostring(bnum[1]) end
+	return tostring(math.Round(bnum[1], 2)) .. "E" .. (bnum[2] * 3)
+end
+
+--bignumwrite_scientificnormalised
+--Writes a BigNumber as a readable string in Scientific Normalised notation. (for example 8.4E(n)1)
+function bignumwrite_scientificnormalised(bnum)
+	if bignumhuge(bnum) then return "∞" end
+	if bnum[2] <= 0 && bnum[1] < 10 then return tostring(bnum[1]) end
+	local amountoftens = math.floor(bnum[1]/10)
+	local normalised = bnum[1] - (10 * amountoftens)
+	return tostring(math.Round(normalised,2)) .. "E(n)" .. (math.Round((bnum[2] * 3) + ((amountoftens/99) * 3),2))
+end
+
+--bignumwrite_standard
+--Writes a BigNumber as a readable string in Standard notation. (for example 4.9 x 10^6)
+function bignumwrite_standard(bnum)
+	if bignumhuge(bnum) then return "∞" end
+	return tostring(bnum[1]) .. " x 10^" .. (bnum[2]*3)
+end
+
+--DEPRECATED FUNCTION - TRY NOT TO USE! - It is still here just in case if older work needs to rely on it.
 --bignumread
 --Takes a BigNumber string and converts it into a BigNumber table.
 --Very useful if you want to jump to high numbers as easy as you do reading them!
 --Be careful, this function has very little to no error-proofing, making it vulnerable to non-BigNumber strings!
+--Also note that this function can only read numbers that are in Simplified notation.
 function bignumread(bnum)
 	if tonumber(bnum) then
 		if tonumber(bnum) < 1000 then
@@ -113,11 +162,22 @@ function bignumread(bnum)
 	end
 end
 
---bignumcalc
---Internally called by some other bignum functions.
---Normalises a BigNumber.
---You should call this function if you rawly create or modify a BigNumber table to have a first entry value of 1000+ or a decimal number below 1.
+--[[
+bignumcalc
+Internally called by some other bignum functions.
+Normalises and/or repairs a BigNumber.
+A broken BigNumber is a BigNumber with a value of anything < 1 or >= 1000, or if the exponent is a float.
+Normally you shouldn't have to worry about calling this function after a BigNumber math function, as they internally call this.
+But if you create a BigNumber by hand or modify it through some other way (say {1200,2} instead of bignumnew(1200,2), or using external math and table indexing), this should be used to mend it.
+=====
+<NOTES:>
+If the value of a BigNumber is zero or negative, the exponent will become zero as well.
+If the exponent is negative, it will reset to zero and set the value to zero as well.
+Likewise; if the value is negative, it will reset to zero and set the exponent to zero as well.
+This function, like most of the other ones, will do nothing if the BigNumber is BigInfinity.
+]]
 function bignumcalc(bnum)
+	if bignumhuge(bnum) then return bnum end
 	if bnum[1] >= 1000 then
 		local additive = math.floor(string.len(string.Replace(string.Comma(math.floor(bnum[1])), ",", ""))/3)
 		bnum[2] = bnum[2]+additive
@@ -131,9 +191,13 @@ function bignumcalc(bnum)
 		end
 		bnum[2] = bnum[2]-1
 	end
-	if bnum[2] < 0 then
+	if bnum[2] < 0 or bnum[1] <= 0 then
 		bnum[2] = 0
-		bnum[1] = 1
+		bnum[1] = 0
+	end
+	if bnum[1] >= math.huge or bnum[2] >= math.huge then --if either is infinity, make both infinity
+		bnum[1] = math.huge
+		bnum[2] = math.huge
 	end
 	return bnum
 end
@@ -186,13 +250,18 @@ end
 --Adds the second BigNumber to the first BigNumber.
 function bignumadd(bnum1, bnum2)
 	local elevation = bignumelevate(bnum1, bnum2)
-	local num = bnum2[1]
-	if elevation < 0 then
-		num = num/(1000^elevation)
+	if elevation < -3 then --the number to add is so large that it may as well be the result
+		bnum1[1] = bnum2[1]
+		bnum1[2] = bnum2[2]
 	else
-		num = num*(1000^-elevation)
+		local num = bnum2[1]
+		if elevation < 0 then --the power of the number to add is lower than zero
+			num = num/(1000^elevation)
+		else --the power of the number to add is higher than or equal to zero
+			num = num*(1000^-elevation)
+		end
+		bnum1[1] = math.Clamp(bnum1[1] + num, 0, 1e308) --shouldn't reach 1e308, but just in case
 	end
-	bnum1[1] = bnum1[1] + num
 	return bignumcalc(bnum1)
 end
 
@@ -291,7 +360,7 @@ function bignumclamp(bnum, limit, limit2)
 end
 
 --bignumvalid
---Checks if a table can be used as a BigNumber.
+--Checks if the argument is/or can be used as a BigNumber.
 function bignumvalid(bnum)
 	local isvalid = false
 	if !istable(bnum) then return false end
